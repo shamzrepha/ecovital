@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!adminOk(req)) return NextResponse.json({ ok: false, error: "Admin key required (set ADMIN_KEY or DEVICE_KEY on the server)." }, { status: 401 });
+  if (!(await adminOk(req))) return NextResponse.json({ ok: false, error: "Sign in as the admin account." }, { status: 401 });
   try {
     const body = await req.json();
     const version = String(body.version || "").trim();

@@ -126,7 +126,7 @@ export async function ingest(
 
   // One-time device token delivery on first upload after claim
   let deviceToken: string | undefined;
-  if (podRow.claimed_by && podRow.device_token && !podRow.token_delivered) {
+  if (podRow.device_token && !podRow.token_delivered) {
     deviceToken = String(podRow.device_token);   // re-sent until the pod authenticates with it (see /api/ingest)
   }
 

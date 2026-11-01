@@ -9,11 +9,11 @@ export const dynamic = "force-dynamic";
 // Shows no secrets.
 export async function GET(req: Request) {
   const me = await getSessionUser(req).catch(() => null);
-  const effKey = process.env.DEVICE_KEY || "evk_6450a3caa5e01e24638ef4e6";
+  const effKey = process.env.DEVICE_KEY || "";
   const out: any = {
     ok: true,
     deviceKeyConfigured: !!effKey,
-    adminKeyConfigured: !!(process.env.ADMIN_KEY || effKey),
+    adminKeyConfigured: true,
     geminiConfigured: !!process.env.GEMINI_API_KEY,
     database: "unknown",
     contacts: [] as any[],

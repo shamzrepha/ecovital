@@ -1,14 +1,12 @@
-// Admin gate for actions that change what every pod runs (publishing firmware).
-// Uses ADMIN_KEY if set, otherwise the DEVICE_KEY (defaulting to the firmware 1.4 built-in key).
-export const DEFAULT_DEVICE_KEY = "evk_6450a3caa5e01e24638ef4e6";
+// Admin gate for actions that change what every pod runs (publishing firmware, downloading the sketch).
+// Only a signed-in account with the admin role may do these. The first account created is the admin.
+import { getSessionUser } from "./session.ts";
 
-export function getDeviceKey(): string {
-  return process.env.DEVICE_KEY || DEFAULT_DEVICE_KEY;
-}
-
-export function adminOk(req: Request): boolean {
-  const expected = process.env.ADMIN_KEY || getDeviceKey();
-  if (!expected) return false;
-  const given = req.headers.get("x-admin-key") ?? "";
-  return given.length > 0 && given === expected;
+export async function adminOk(req: Request): Promise<boolean> {
+  try {
+    const u = await getSessionUser(req);
+    return !!u && u.role === "admin";
+  } catch {
+    return false;
+  }
 }

@@ -55,8 +55,9 @@ export async function noteContact(deviceId: string, claim: string | null, result
 }
 
 /**
- * Authenticate a pod check-in against its private device_token (once delivered) or the shared DEVICE_KEY.
- * Records every contact (ok or bad-key) in pod_contact.
+ * Authenticate a pod check-in. A new pod enrolls with no key and is given a private token; after that only the token works.
+ * Older firmware that sends the shared DEVICE_KEY is still accepted until it has confirmed its token.
+ * Every contact (ok or bad-key) is recorded in pod_contact.
  */
 export async function verifyPodIngestKey(args: {
   deviceId: string;
@@ -65,30 +66,41 @@ export async function verifyPodIngestKey(args: {
   fw: string | null;
 }): Promise<{ authorized: boolean; status?: number; error?: string }> {
   const { deviceId, providedKey, claim, fw } = args;
-  const expected = process.env.DEVICE_KEY || "evk_6450a3caa5e01e24638ef4e6";
+  const shared = process.env.DEVICE_KEY || "";
+  const sharedOk = !!shared && providedKey === shared;   // older firmware still sends this
   let authorized = false;
   try {
     const sql = await db();
     const rows = await sql`SELECT device_token, token_delivered FROM pods WHERE device_id = ${deviceId}`;
     const tok = rows.length ? (rows[0].device_token as string | null) : null;
-    if (tok && providedKey === tok) {
-      authorized = true;
-      if (!rows[0].token_delivered) {
-        await sql`UPDATE pods SET token_delivered = true WHERE device_id = ${deviceId}`;
+    if (tok) {
+      if (providedKey === tok) {
+        authorized = true;
+        if (!rows[0].token_delivered) await sql`UPDATE pods SET token_delivered = true WHERE device_id = ${deviceId}`;
+      } else if (sharedOk || providedKey === "") {
+        // The shared key (or no key, if the reply carrying the token was lost) only works until the pod has confirmed its own private token.
+        authorized = !rows[0].token_delivered;
       }
-    } else if (!!expected && providedKey === expected) {
-      // The shared key only works until the pod has confirmed its own private token.
-      authorized = !(tok && rows[0].token_delivered);
+    } else if (providedKey === "" || sharedOk) {
+      // First contact: the pod enrolls itself and the server hands it a private token (no key is baked into the firmware).
+      const known = await sql`SELECT 1 FROM devices WHERE id = ${deviceId}`;
+      if (!known.length) {
+        const recent = await sql`SELECT count(*) AS n FROM devices WHERE created_at > now() - interval '1 hour'`;
+        if (Number(recent[0]?.n ?? 0) >= 60) {
+          return { authorized: false, status: 429, error: "Too many new pods registering at once. Try again in a few minutes." };
+        }
+      }
+      const fresh = "evtok_" + randomBytes(16).toString("hex");
+      await sql`INSERT INTO pods (device_id, device_token, token_delivered) VALUES (${deviceId}, ${fresh}, false)
+                ON CONFLICT (device_id) DO UPDATE SET device_token = COALESCE(pods.device_token, EXCLUDED.device_token)`;
+      authorized = true;
     }
   } catch {
-    authorized = !!expected && providedKey === expected;
+    authorized = sharedOk;
   }
   if (!authorized) {
     await noteContact(deviceId, claim, "bad-key", fw);
-    if (!expected) {
-      return { authorized: false, status: 500, error: "DEVICE_KEY is not configured on the server" };
-    }
-    return { authorized: false, status: 401, error: "Bad device key" };
+    return { authorized: false, status: 401, error: "This pod was not recognised. If you just re-flashed it, remove it from your account in the app and add it again." };
   }
   await noteContact(deviceId, claim, "ok", fw);
   return { authorized: true };
@@ -188,12 +200,15 @@ export async function claimPodByCode(args: {
     await sql`INSERT INTO rooms (id, owner_id, name, type) VALUES (${roomId}, ${userId}, ${args.roomName.trim()}, ${profile})`;
   }
 
-  const deviceToken = "evtok_" + randomBytes(16).toString("hex");
-  const shareToken = "share_" + randomBytes(10).toString("hex");
+  // The pod already has a private token from enrolling; keep it so the pod stays connected. Only mint one if it has none.
+  const existing = await sql`SELECT device_token, token_delivered, share_token FROM pods WHERE device_id = ${deviceId}`;
+  const deviceToken = (existing[0]?.device_token as string | null) || "evtok_" + randomBytes(16).toString("hex");
+  const tokenDelivered = !!existing[0]?.device_token && !!existing[0]?.token_delivered;
+  const shareToken = (existing[0]?.share_token as string | null) || "share_" + randomBytes(10).toString("hex");
 
   await sql`
     INSERT INTO pods (device_id, claimed_by, claimed_at, room_id, profile, nickname, device_token, token_delivered, share_token)
-    VALUES (${deviceId}, ${userId}, now(), ${roomId}, ${profile}, ${nickname}, ${deviceToken}, false, ${shareToken})
+    VALUES (${deviceId}, ${userId}, now(), ${roomId}, ${profile}, ${nickname}, ${deviceToken}, ${tokenDelivered}, ${shareToken})
     ON CONFLICT (device_id) DO UPDATE SET
       claimed_by = ${userId},
       claimed_at = now(),
@@ -201,8 +216,7 @@ export async function claimPodByCode(args: {
       profile = ${profile},
       nickname = ${nickname},
       device_token = ${deviceToken},
-      token_delivered = false,
-      share_token = COALESCE(pods.share_token, ${shareToken})
+      share_token = ${shareToken}
   `;
 
   if (args.nickname?.trim() || args.location?.trim()) {
@@ -223,7 +237,7 @@ export async function claimPodByCode(args: {
     deviceId,
     podId: deviceId,
     name: nickname,
-    deviceToken,
+    deviceToken: tokenDelivered ? undefined : deviceToken,
     latest: latestRow.length ? {
       t: Number(latestRow[0].t),
       dust: num(latestRow[0].dust),
@@ -278,7 +292,7 @@ export async function pairStatus(rawCode: string, userId: string): Promise<PairS
     return {
       state: "bad-key",
       podId: seen[0].device_id as string,
-      message: "The pod is reaching EcoVital but was turned away because its device key does not match. Re-flash it with the firmware from the Admin page, or enter the key on the pod's own Settings page.",
+      message: "The pod is reaching EcoVital but was not recognised. If you just re-flashed it, remove it from your account in the app (pod page, bottom), then add it again with its new code.",
     };
   }
   const fails = Number(lockRows[0]?.fails ?? 0) + 1;

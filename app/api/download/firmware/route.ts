@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // GET /api/download/firmware           -> ecovital_pod.zip: the sketch folder (ecovital_pod/ with its 3 header files),
-//                                         already pointing at this site, with this server's DEVICE_KEY filled in.
+//                                         already pointing at this site, with this site's address filled in (no key is needed).
 // GET /api/download/firmware?file=ino  -> just the .ino (needs logo.h, welcome.h and clips.h next to it)
 const FILES = ["ecovital_pod.ino", "logo.h", "welcome.h", "clips.h"];
 
@@ -20,10 +20,10 @@ function readFw(name: string): Buffer | null {
 }
 
 function preconfigure(src: string, origin: string): string {
-  const key = process.env.EMBED_DEVICE_KEY === "0" ? "" : process.env.DEVICE_KEY || "evk_6450a3caa5e01e24638ef4e6";
-  let out = src.replace(/^#define DEFAULT_BASE .*$/m, `#define DEFAULT_BASE "${origin}"`);
-  if (key) out = out.replace(/^#define DEFAULT_KEY .*$/m, `#define DEFAULT_KEY   "${key.replace(/["\\]/g, "")}"`);
-  return `// Pre-configured for EcoVital cloud: ${origin}\n` + out;
+  // Only the site address is filled in. The pod enrolls itself, so no key is put in the file.
+  const out = src.replace(/^#define DEFAULT_BASE .*$/m, `#define DEFAULT_BASE "${origin}"`);
+  return `// Pre-configured for EcoVital cloud: ${origin}
+` + out;
 }
 
 // ---- minimal ZIP writer (stored, no compression) ----
@@ -55,7 +55,7 @@ function zip(entries: { name: string; data: Buffer }[]): Buffer {
 }
 
 export async function GET(req: NextRequest) {
-  if (!adminOk(req)) return NextResponse.json({ error: "Admin key required." }, { status: 401 });
+  if (!(await adminOk(req))) return NextResponse.json({ error: "Sign in as the admin account." }, { status: 401 });
   const origin = req.nextUrl.origin;
   const ino = readFw("ecovital_pod.ino");
   if (!ino) return NextResponse.json({ error: "Firmware source is not bundled with this deployment." }, { status: 404 });

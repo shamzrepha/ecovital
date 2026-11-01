@@ -207,7 +207,7 @@ test("claim explains bad-key", async () => {
   });
   assert.equal(res.ok, false);
   assert.ok(res.error);
-  assert.match(res.error!, /device key does not match/i);
+  assert.match(res.error!, /not recognised/i);
 });
 
 test("shared key rejected after token confirmation", async () => {

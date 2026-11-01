@@ -8,7 +8,6 @@ export default function AdminPage() {
   const [version, setVersion] = useState("1.4");
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [adminKey, setAdminKey] = useState("");
   const [notes, setNotes] = useState("");
   const [channel, setChannel] = useState<"stable" | "beta">("stable");
   const [targetMode, setTargetMode] = useState<"all" | string>("all");
@@ -29,12 +28,11 @@ export default function AdminPage() {
 
   useEffect(() => {
     load();
-    try { setAdminKey(sessionStorage.getItem("ev-admin-key") || ""); } catch {}
   }, [load]);
 
   async function downloadFirmware() {
     setMsg("Preparing firmware…");
-    const res = await fetch("/api/download/firmware", { headers: { "x-admin-key": adminKey } });
+    const res = await fetch("/api/download/firmware");
     if (!res.ok) { setMsg((await res.json().catch(() => ({}))).error || "Could not download the firmware."); return; }
     const url = URL.createObjectURL(await res.blob());
     const a = document.createElement("a");
@@ -45,21 +43,20 @@ export default function AdminPage() {
 
   async function publishOta(e: React.FormEvent) {
     e.preventDefault();
-    try { sessionStorage.setItem("ev-admin-key", adminKey); } catch {}
     let res: Response;
     if (file) {
       setMsg(`Uploading ${(file.size / 1024).toFixed(0)} KB to the cloud...`);
       const qs = new URLSearchParams({ version, notes, channel, target: targetMode });
       res = await fetch(`/api/ota/upload?${qs}`, {
         method: "POST",
-        headers: { "content-type": "application/octet-stream", "x-admin-key": adminKey },
+        headers: { "content-type": "application/octet-stream" },
         body: await file.arrayBuffer(),
       });
     } else {
       setMsg("Publishing OTA firmware release...");
       res = await fetch("/api/ota", {
         method: "POST",
-        headers: { "content-type": "application/json", "x-admin-key": adminKey },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           version,
           url,
@@ -133,10 +130,8 @@ export default function AdminPage() {
           </div>
 
           <div className="form-row">
-            <label htmlFor="ota-key">Admin key (your ADMIN_KEY or DEVICE_KEY from Vercel)</label>
-            <input id="ota-key" className="input" type="password" value={adminKey} onChange={(e) => setAdminKey(e.target.value)} required />
             <span className="note">Updates: Arduino IDE → Sketch → Export Compiled Binary, then upload the file ending <code>.ino.bin</code>. The version above must equal <code>FW_VERSION</code> inside that firmware.</span>
-            <div><button type="button" className="btn small" onClick={downloadFirmware} disabled={!adminKey}>Download pod firmware (pre-set to this site)</button></div>
+            <div><button type="button" className="btn small" onClick={downloadFirmware}>Download pod firmware (pre-set to this site)</button></div>
           </div>
 
           <div className="form-row">

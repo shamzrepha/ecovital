@@ -19,7 +19,7 @@ EcoVital pods (ESP32, dust + gas + temperature/humidity sensors, speaker) upload
 
 ## How pairing works
 
-1. The pod identifies itself with a unique ID from its chip and shows a random 6-character **pair code**. It uploads to this app with the shared `DEVICE_KEY`.
+1. The pod identifies itself with a unique ID from its chip and shows a random 6-character **pair code**. On first contact it enrolls itself with no key; the server hands it a private token that it stores and uses from then on.
 2. On `/add` the user types the code. `GET /api/claim?code=` says whether the pod has been heard, was turned away for a wrong key, or already belongs to someone else. Checking never claims anything and does not count as a wrong guess.
 3. `POST /api/claim` links the pod to the signed-in account and issues a private device token. The pod receives it on its next upload and stops using the shared key.
 4. Wrong codes that no pod has ever announced count as failed claims: 5 in a row locks claiming for 10 minutes.

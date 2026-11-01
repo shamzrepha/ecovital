@@ -102,3 +102,31 @@ test("app settings and SOS reach the pod in the ingest reply, SOS only once", as
   await sql`UPDATE pods SET sos_at = now() - interval '5 minutes' WHERE device_id = 'pod-sos-1'`;
   assert.equal((await ingest({ id: "pod-sos-1", name: "Pod", meta: {} }, sample)).sos, undefined);   // stale SOS is dropped
 });
+
+test("a pod enrolls itself with no key, gets a private token, and only the token works afterwards", async () => {
+  process.env.DEVICE_KEY = "shared-test-key";
+  const { verifyPodIngestKey } = await import("../lib/pods.ts");
+  const { db } = await import("../lib/db.ts");
+  const sql = await db();
+  const ev = (key: string) => verifyPodIngestKey({ deviceId: "pod-enroll-1", providedKey: key, claim: "ENRL26", fw: "1.7" });
+
+  assert.equal((await ev("")).authorized, true);                       // first contact, no key in the firmware
+  const row = await sql`SELECT device_token, token_delivered FROM pods WHERE device_id = 'pod-enroll-1'`;
+  const tok = row[0].device_token as string;
+  assert.match(tok, /^evtok_/);
+
+  const first = await ingest({ id: "pod-enroll-1", name: "P", meta: { fw: "1.7", claim: "ENRL26" } }, [{ ageMs: 0, dust: 10, air: 90, temp: 26, hum: 48 }]);
+  assert.equal(first.deviceToken, tok);                                // handed to the pod in the reply
+
+  assert.equal((await ev("")).authorized, true);                       // still allowed until the pod proves it has the token
+  assert.equal((await ev(tok)).authorized, true);
+  assert.equal((await ev("")).authorized, false);                      // now keyless contact is refused
+  assert.equal((await ev("wrong")).authorized, false);
+
+  // Owner removes the pod: the token is cleared and the pod can enroll again with a new one.
+  const u = await createAccount("eve@example.com", "Eve", "longenough1");
+  assert.equal((await claimPodByCode({ code: "ENRL26", userId: u.id })).ok, true);
+  assert.equal((await unclaimPod("pod-enroll-1", u.id)).ok, true);
+  assert.equal((await ev(tok)).authorized, false);
+  assert.equal((await ev("")).authorized, true);
+});

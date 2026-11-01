@@ -10,8 +10,8 @@ export const dynamic = "force-dynamic";
 // Body: the raw compiled ESP32 app image (Arduino IDE > Sketch > Export Compiled Binary, the file ending .ino.bin).
 // Vercel allows request bodies up to 4.5 MB, which fits this firmware (about 1.3 MB).
 export async function POST(req: NextRequest) {
-  if (!adminOk(req)) {
-    return NextResponse.json({ ok: false, error: "Admin key required (set ADMIN_KEY or DEVICE_KEY on the server)." }, { status: 401 });
+  if (!(await adminOk(req))) {
+    return NextResponse.json({ ok: false, error: "Sign in as the admin account." }, { status: 401 });
   }
   const q = req.nextUrl.searchParams;
   const buf = Buffer.from(await req.arrayBuffer());
