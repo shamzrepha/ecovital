@@ -73,6 +73,16 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             📲 Download App
           </Link>
 
+          <a
+            href="https://github.com/shamzrepha/ecovital"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn small"
+            title="Open GitHub Repository (shamzrepha/ecovital)"
+          >
+            GitHub ↗
+          </a>
+
           <button
             type="button"
             className="btn small"

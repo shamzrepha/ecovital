@@ -171,9 +171,20 @@ async function open(): Promise<Sql> {
   const url = process.env.DATABASE_URL;
   if (process.env.LOCAL_PGLITE === "1" || !url) {
     // Zero-config fallback when DATABASE_URL is not set (or in local testing).
-    const shim = pathToFileURL(join(process.cwd(), "lib", "pglite-shim.mjs")).href;
-    const m: any = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ shim);
-    sql = m.makeSql();
+    try {
+      const { PGlite } = await import("@electric-sql/pglite");
+      const pg = new PGlite(process.env.PGLITE_DIR || undefined);
+      sql = async (strings: TemplateStringsArray, ...values: any[]) => {
+        let text = strings[0];
+        for (let i = 0; i < values.length; i++) text += `$${i + 1}` + strings[i + 1];
+        const res = await pg.query(text, values);
+        return res.rows as Row[];
+      };
+    } catch {
+      const shim = pathToFileURL(join(process.cwd(), "lib", "pglite-shim.mjs")).href;
+      const m: any = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ shim);
+      sql = m.makeSql();
+    }
   } else {
     sql = neon(url) as unknown as Sql;
   }
