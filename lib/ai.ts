@@ -610,8 +610,51 @@ function toMono24k(buf: Buffer, mime?: string): Buffer {
   return out;
 }
 
-/** Returns 16-bit mono PCM at 24 kHz. Throws if speech could not be generated. */
+/** Documented Gemini speech route (generateContent with an AUDIO response). Returns 16-bit mono PCM at 24 kHz. */
+async function synthesizeStandard(text: string): Promise<Buffer> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY is not set");
+  const model = process.env.GEMINI_TTS_STD_MODEL || "gemini-2.5-flash-preview-tts";
+  const voice = process.env.GEMINI_VOICE || "Kore";
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 12000);
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST", signal: ctl.signal,
+      headers: { "content-type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text }] }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
+        },
+      }),
+    });
+    if (!res.ok) throw new Error(`Gemini TTS ${res.status}: ${(await res.text()).slice(0, 200)}`);
+    const a = findAudio(await res.json());
+    if (!a) throw new Error("Gemini TTS response had no audio");
+    const pcm = toMono24k(Buffer.from(a.data, "base64"), a.mime);
+    if (pcm.length < 2000) throw new Error("Gemini TTS audio too short");
+    return pcm;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Returns 16-bit mono PCM at 24 kHz. Tries the documented route first, then the older one. Throws if both fail. */
 export async function synthesize(text: string): Promise<Buffer> {
+  try {
+    return await synthesizeStandard(text);
+  } catch (first) {
+    try {
+      return await synthesizeInteractions(text);
+    } catch (second) {
+      throw new Error(`${(first as Error).message}; then ${(second as Error).message}`.slice(0, 400));
+    }
+  }
+}
+
+async function synthesizeInteractions(text: string): Promise<Buffer> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
   const model = process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts";
