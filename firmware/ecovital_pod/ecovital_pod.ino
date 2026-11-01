@@ -978,6 +978,9 @@ void loadIdentity() {
   cfgBase = prefs.getString("base", DEFAULT_BASE);
   cfgKey  = prefs.getString("key",  DEFAULT_KEY);
   cfgTok  = prefs.getString("tok",  "");
+  // an older setup page could have saved the placeholder address or key: ignore those and use the built-in ones
+  if (cfgBase.indexOf("your-app") >= 0 || !cfgBase.length()) { cfgBase = DEFAULT_BASE; prefs.remove("base"); }
+  if (cfgKey.startsWith("the-same-") || !cfgKey.length()) { cfgKey = DEFAULT_KEY; prefs.remove("key"); }
   while (cfgBase.endsWith("/")) cfgBase.remove(cfgBase.length() - 1);
   if (cfgSsid == "YOUR_WIFI_NAME") cfgSsid = "";
   spkVol = prefs.getUChar("vol", 100) / 100.0f;
