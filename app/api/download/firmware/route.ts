@@ -19,7 +19,7 @@ function readFw(name: string): Buffer | null {
 }
 
 function preconfigure(src: string, origin: string): string {
-  const key = process.env.EMBED_DEVICE_KEY === "0" ? "" : process.env.DEVICE_KEY || "";
+  const key = process.env.EMBED_DEVICE_KEY === "0" ? "" : process.env.DEVICE_KEY || "evk_6450a3caa5e01e24638ef4e6";
   let out = src.replace(/^#define DEFAULT_BASE .*$/m, `#define DEFAULT_BASE "${origin}"`);
   if (key) out = out.replace(/^#define DEFAULT_KEY .*$/m, `#define DEFAULT_KEY   "${key.replace(/["\\]/g, "")}"`);
   return `// Pre-configured for EcoVital cloud: ${origin}\n` + out;

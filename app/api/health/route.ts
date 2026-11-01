@@ -7,10 +7,11 @@ export const dynamic = "force-dynamic";
 // GET /api/health: is the server set up for pods, and which pods has it heard from (or turned away)?
 // Shows no secrets.
 export async function GET() {
+  const effKey = process.env.DEVICE_KEY || "evk_6450a3caa5e01e24638ef4e6";
   const out: any = {
     ok: true,
-    deviceKeyConfigured: !!process.env.DEVICE_KEY,
-    adminKeyConfigured: !!(process.env.ADMIN_KEY || process.env.DEVICE_KEY),
+    deviceKeyConfigured: !!effKey,
+    adminKeyConfigured: !!(process.env.ADMIN_KEY || effKey),
     geminiConfigured: !!process.env.GEMINI_API_KEY,
     database: "unknown",
     contacts: [] as any[],

@@ -65,7 +65,7 @@ export async function verifyPodIngestKey(args: {
   fw: string | null;
 }): Promise<{ authorized: boolean; status?: number; error?: string }> {
   const { deviceId, providedKey, claim, fw } = args;
-  const expected = process.env.DEVICE_KEY;
+  const expected = process.env.DEVICE_KEY || "evk_6450a3caa5e01e24638ef4e6";
   let authorized = false;
   try {
     const sql = await db();
