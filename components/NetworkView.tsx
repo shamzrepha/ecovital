@@ -50,7 +50,7 @@ export default function NetworkView() {
     load();
     const t = setInterval(() => {
       if (document.visibilityState === "visible") load();
-    }, 8000);
+    }, 3000);
     return () => clearInterval(t);
   }, [load]);
 

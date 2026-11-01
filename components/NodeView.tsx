@@ -65,7 +65,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
         load();
         setTick((x) => x + 1);
       }
-    }, 5000);
+    }, 3000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -408,7 +408,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                   <div>
                     <h3>Remote Speaker Volume &amp; Sharing</h3>
                     <p className="note" style={{ marginTop: 0 }}>
-                      Sent in the reply to the pod&rsquo;s next <code>POST /api/ingest</code> check-in (within 15 seconds) and saved to ESP32 flash.
+                      Sent in the reply to the pod&rsquo;s next <code>POST /api/ingest</code> check-in (within about 5 seconds) and saved to ESP32 flash.
                     </p>
                     <div className="form-row">
                       <label htmlFor="pod-vol">Pod speaker volume: <b>{volume}%</b></label>

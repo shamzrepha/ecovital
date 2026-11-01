@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "1.4"
+#define FW_VERSION "1.5"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -84,7 +84,7 @@ volatile bool  muted  = false;
 #define SPEAKER_VOLUME (spkVol * OUT_HEADROOM)    // loudness of beeps and AI voice, set from the app
 #define CLIP_VOLUME (spkVol * OUT_HEADROOM)
 #define WELCOME_VOLUME (spkVol * OUT_HEADROOM)
-#define UPLOAD_EVERY_MS 15000    // how often readings are sent
+#define UPLOAD_EVERY_MS 5000     // how often readings are sent (matches the 5 s sample rate, so the app is near real time)
 #define SAMPLE_EVERY_MS 5000     // how often a reading is recorded
 // =====================================================================
 
@@ -537,8 +537,8 @@ bool i2sStart() {
   if (muted) return false;
   i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
   cc.auto_clear = true;
-  cc.dma_desc_num = 8;
-  cc.dma_frame_num = 256;
+  cc.dma_desc_num = 12;               // about 180 ms of audio queued, so a short Wi-Fi stall does not crackle
+  cc.dma_frame_num = 360;
   if (i2s_new_channel(&cc, &txChan, NULL) != ESP_OK) { txChan = NULL; return false; }
   i2s_std_config_t sc = {};
   sc.clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SPEECH_RATE);
@@ -577,8 +577,8 @@ bool i2sStart() {
   cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;     // same sample to both channels
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
-  cfg.dma_buf_count = 8;
-  cfg.dma_buf_len = 256;
+  cfg.dma_buf_count = 12;
+  cfg.dma_buf_len = 360;
   cfg.use_apll = false;
   cfg.tx_desc_auto_clear = true;
   if (i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL) != ESP_OK) return false;
@@ -676,18 +676,45 @@ bool playSpeech(int eventId) {
     return false;
   }
 
-  if (!i2sStart()) { Serial.println("[voice] I2S start failed"); http.end(); return false; }
+  WiFiClient* stream = http.getStreamPtr();
+  int remaining = http.getSize();      // -1 if unknown
+  uint8_t buf[1024];
+  uint32_t lastData = millis();
+  size_t total = 0;
+
+  // Fill about 0.7 s of speech into memory BEFORE the speaker starts. Starting on the first packet makes the
+  // speaker run out of audio whenever Wi-Fi hiccups, which is the crackle.
+  const size_t PRE = 32768;
+  uint8_t* pre = (uint8_t*)malloc(PRE);
+  size_t preLen = 0;
+  while (pre && preLen < PRE && remaining != 0) {
+    size_t avail = stream->available();
+    if (!avail) {
+      if (!stream->connected()) break;
+      if (millis() - lastData > 6000) break;
+      delay(2);
+      continue;
+    }
+    size_t room = PRE - preLen;
+    int n = stream->readBytes(pre + preLen, avail < room ? avail : room);
+    if (n <= 0) continue;
+    lastData = millis();
+    if (remaining > 0) remaining -= n;
+    preLen += n;
+  }
+
+  if (!i2sStart()) { Serial.println("[voice] I2S start failed"); if (pre) free(pre); http.end(); return false; }
   speaking = true;
   carryByte = -1;
 
   // 80 ms of silence first so the amplifier wakes up without a pop
   { int16_t z[256 * 2] = {0}; i2sWrite(z, sizeof(z)); }
 
-  WiFiClient* stream = http.getStreamPtr();
-  int remaining = http.getSize();      // -1 if unknown
-  uint8_t buf[1024];
-  uint32_t lastData = millis();
-  size_t total = 0;
+  if (pre) {
+    if (preLen) { writePcm(pre, preLen); total += preLen; }
+    free(pre);
+  }
+  lastData = millis();
   while (remaining != 0) {
     size_t avail = stream->available();
     if (!avail) {
@@ -1512,7 +1539,7 @@ void netTask(void*) {
   for (;;) {
     serviceAudio();
     portalTick();
-    if (!wifiBegun) { WiFi.mode(WIFI_STA); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASS); wifiBegun = true; lastTry = millis(); }
+    if (!wifiBegun) { WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASS); wifiBegun = true; lastTry = millis(); }
 
     if (WiFi.status() != WL_CONNECTED) {
       netState = 0;

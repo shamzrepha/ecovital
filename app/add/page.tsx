@@ -120,7 +120,7 @@ function AddPod() {
     }
   }
 
-  // After adding, wait for the first reading to show up (the pod uploads about every 15 s).
+  // After adding, wait for the first reading to show up (the pod uploads about every 5 s).
   useEffect(() => {
     if (step !== 4 || !added || firstReading === "got") return;
     let live = true;
@@ -283,7 +283,7 @@ function AddPod() {
               <div className="pair-status good" role="status"><span className="dot good" style={{ marginTop: 6 }} /><div>First reading received. Your pod is live.</div></div>
             )}
             {firstReading === "waiting" && (
-              <div className="pair-status" role="status"><span className="dot watch pulse" style={{ marginTop: 6 }} /><div>Waiting for the first reading. The pod sends one about every 15 seconds. The MQ sensor needs about a minute to warm up.</div></div>
+              <div className="pair-status" role="status"><span className="dot watch pulse" style={{ marginTop: 6 }} /><div>Waiting for the first reading. The pod sends one about every 5 seconds. The MQ sensor needs about a minute to warm up.</div></div>
             )}
             {firstReading === "slow" && (
               <div className="pair-status watch" role="status"><span className="dot watch" style={{ marginTop: 6 }} /><div>No reading yet. The pod is added, so it will appear as soon as it uploads. Check that it still shows green Wi-Fi bars.</div></div>
