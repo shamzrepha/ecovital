@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 const SUGGESTED_QUESTIONS = [
   "How does the air in this room feel right now?",
@@ -36,6 +36,13 @@ function AskInner() {
   useEffect(() => {
     loadHistory(podId);
   }, [podId, loadHistory]);
+
+  // Keep the newest message (and the "checking" note) in view.
+  const chatRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const box = chatRef.current;
+    if (box) box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
+  }, [messages, busy]);
 
   async function askQuestion(qText: string) {
     const q = qText.trim();
@@ -104,10 +111,10 @@ function AskInner() {
               <span className="tag-estimated">Grounded AI + Honesty Guard</span>
             </div>
 
-            <div className="chat-box" role="log" aria-live="polite">
+            <div className="chat-box" role="log" aria-live="polite" ref={chatRef}>
               {messages.length === 0 && (
                 <div className="note" style={{ padding: 12 }}>
-                  Ask anything about <b>{podId}</b>&rsquo;s recent readings or spoken alerts. Try one of the suggested questions below — including the honesty guard tests for CO₂/PM2.5 or medical advice!
+                  Ask anything about <b>{podId}</b>&rsquo;s recent readings or spoken alerts. Try one of the suggested questions below.
                 </div>
               )}
               {messages.map((m) => (
@@ -124,7 +131,7 @@ function AskInner() {
                   )}
                 </div>
               ))}
-              {busy && <div className="note">Checking pod readings and event log...</div>}
+              {busy && <div className="note">Looking at your pod’s readings…</div>}
             </div>
 
             <form
