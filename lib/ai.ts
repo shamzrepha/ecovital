@@ -135,18 +135,18 @@ export function compactContext(ctx: AiContext) {
   };
 }
 
-const SYSTEM = `You are EcoVital, a small classroom and home air-monitoring pod in Nigeria that speaks out loud.
+const SYSTEM = `You are EcoVital, a friendly classroom and home air-monitoring pod in Nigeria that speaks out loud to everyday people (teachers, parents, students, and families).
 Return JSON: {"line":"...","tags":["measured"],"action":"open_window|fan|ac|water|close_window|none","translatedText":"optional translation if language is ig/yo/ha"}
 Hard rules for "line":
-- At most 32 words, plain spoken English (Nigerian English default), no lists, no emojis, no markdown.
-- Put practical action FIRST or immediately with the reading.
-- Use only the numbers in the data. Say units in words ("percent", "degrees Celsius"). Never use real-world units like ug/m3 or ppm.
+- At most 32 words, warm, natural, everyday spoken English (Nigerian English default), no lists, no emojis, no markdown, and no technical jargon.
+- Put practical, easy-to-follow action FIRST or immediately with the reading so anyone in the room knows what to do.
+- Use only the numbers in the data. Say units in plain words ("percent", "degrees Celsius"). Never use technical mass/gas units like ug/m3 or ppm.
 - Measured values are facts ("measured" tag). Anything from trendEstimates is an estimate ("estimate" tag) and must be introduced with "I estimate" or "looks like it may", never stated as certain.
 - Never claim a health risk, medical diagnosis, or specific gas.
-- No automatic fan or purifier exists; advice is for a person to do.
-- alert: give the action and what changed with the current number.
-- predictive: give the action and say what is trending and when it may cross the limit (estimate).
-- recovered: say "All good now" or that it is back to normal with the new reading.`;
+- No automatic fan or purifier exists; advice is a simple step a person can do (like opening a window, turning on a fan, or drinking water).
+- alert: warmly state what changed in plain words with the current number, and give one simple action.
+- predictive: give a friendly heads-up on what is trending, when it may cross the comfort limit (estimate), and what to do now.
+- recovered: warmly say "All good now" or that the room is comfortable and back to normal with the new reading.`;
 
 function clean(text: string): string {
   let t = text.replace(/[*_`#>]/g, "").replace(/\s+/g, " ").trim().replace(/^["']|["']$/g, "");
@@ -181,35 +181,38 @@ export function fallbackLine(ctx: AiContext): string {
   return clean(`${cap} ${verb} ${val}, which is ${word}. ${act}`);
 }
 
-async function geminiText(prompt: string, systemPrompt = SYSTEM): Promise<string> {
+async function geminiText(prompt: string, systemPrompt = SYSTEM, maxTokens = 320): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
-  const model = process.env.GEMINI_TEXT_MODEL || "gemini-3.8-flash";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  const body = (withThinking: boolean) => ({
-    systemInstruction: { parts: [{ text: systemPrompt }] },
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      maxOutputTokens: 280, temperature: 0.4,
-      ...(withThinking ? { thinkingConfig: { thinkingLevel: "low" } } : {}),
-    },
-  });
-  for (const withThinking of [true, false]) {
+  const models = process.env.GEMINI_TEXT_MODEL
+    ? [process.env.GEMINI_TEXT_MODEL, "gemini-2.5-flash"]
+    : ["gemini-2.5-flash", "gemini-2.0-flash"];
+
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    const body = {
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        maxOutputTokens: maxTokens,
+        temperature: 0.45,
+      },
+    };
     const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), 7000);
+    const timer = setTimeout(() => ctl.abort(), 7500);
     try {
       const res = await fetch(url, {
         method: "POST", signal: ctl.signal,
         headers: { "content-type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify(body(withThinking)),
+        body: JSON.stringify(body),
       });
-      if (res.status === 400 && withThinking) continue;
-      if (!res.ok) throw new Error(`Gemini text ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      if (!res.ok) continue;
       const j: any = await res.json();
       const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
       const text = parts.map((p) => p.text ?? "").join(" ");
-      if (!text.trim()) throw new Error("Gemini returned no text");
-      return text;
+      if (text.trim()) return text;
+    } catch {
+      // try next model
     } finally {
       clearTimeout(timer);
     }
@@ -263,7 +266,7 @@ function parseAiOutput(raw: string, ctx: AiContext): GeneratedLine {
 export async function generateLine(ctx: AiContext): Promise<GeneratedLine> {
   try {
     const prompt = "Data (JSON):\n" + JSON.stringify(compactContext(ctx));
-    const raw = await geminiText(prompt);
+    const raw = await geminiText(prompt, SYSTEM, 260);
     return parseAiOutput(raw, ctx);
   } catch (e: any) {
     const text = fallbackLine(ctx);
@@ -299,14 +302,42 @@ export interface AskOutput {
   source: "gemini" | "template";
 }
 
-const ASK_SYSTEM = `You are Ask EcoVital, the grounded assistant for an EcoVital classroom and home air monitor.
-Rules:
-1. Answer ONLY from the provided JSON data. Never guess or invent numbers.
-2. If the user asks about something not in the data (e.g. CO2 ppm, PM2.5 ug/m3, outdoor pollen, yesterday if not provided, or medical advice), say plainly: "I don't have data for that."
-3. Dust (0-100) and Air index (0-100, higher is cleaner) are relative sensor indexes, NOT ug/m3 or ppm. Never attach ug/m3 or ppm to them.
-4. Distinguish Measured readings from Estimated 10-minute trends.
-5. Cite the exact time ranges you used (e.g. "14:00-15:00 readings").
-6. Keep answers concise (2 to 4 sentences), helpful, and give practical advice a person can do (no automatic fan claims).`;
+const ASK_SYSTEM = `You are Ask EcoVital, a warm, friendly, and interactive room-comfort assistant for an EcoVital air monitor.
+Remember: Most users are everyday people (teachers, parents, students, clinic staff) who do NOT know technical sensor terms.
+
+How to speak with the user:
+1. Be conversational, welcoming, and easy to understand — explain what the numbers actually FEEL like in real life:
+   - Air index (0–100%, where higher is cleaner/fresher): 80–100% is fresh and clean; below 70% means the room is getting stuffy or smoky.
+   - Dust level (0–100%, where lower is cleaner): below 30% is clear; above 35% means noticeable dust in the air.
+   - Temperature (°C): around 22–29°C is comfortable; above 30°C feels warm/hot.
+   - Humidity (%): 35–65% is comfortable; below 30% feels dry (like Harmattan weather); above 70% feels damp/muggy.
+2. Avoid dry technical jargon like "hourly buckets", "linear regression", "telemetry", or "relative index" unless explaining gently what a sensor does.
+3. Answer ONLY using the numbers in the provided JSON data. Never guess or invent numbers.
+4. If the user asks about something not in the data (e.g. CO2 ppm, PM2.5 ug/m3, outdoor pollen, or medical diagnosis), say plainly: "I don't have data for that" and gently explain what the pod can measure instead. Never attach ug/m3 or ppm to dust or air scores, and never make medical claims.
+5. Clearly distinguish current Measured readings from Estimated short-term trends, and mention the time window (e.g. "between 14:00 and 15:00") when referring to past hours.
+6. Give a simple, practical tip a person can do right now (like opening opposite windows for a breeze, switching on a fan, or keeping drinking water nearby — never claim the pod controls fans automatically).
+7. End your reply with a short, friendly follow-up question (e.g. "Would you like to know what the room was like earlier today, or how to make it cooler?") so the conversation feels interactive and helpful. Keep the whole response around 3 to 5 sentences.`;
+
+function describeReadingPlainly(latest: Partial<Record<MetricKey, number | null>>): string {
+  const bits: string[] = [];
+  if (latest.air != null) {
+    const feel = latest.air >= 80 ? "fresh and clean" : latest.air >= 65 ? "slightly stuffy" : "stuffy — fresh air will help";
+    bits.push(`Air freshness is ${fmt("air", latest.air)}% (${feel})`);
+  }
+  if (latest.dust != null) {
+    const feel = latest.dust < 25 ? "very low dust" : latest.dust < 40 ? "moderate dust" : "dusty";
+    bits.push(`Dust level is ${fmt("dust", latest.dust)}% (${feel})`);
+  }
+  if (latest.temp != null) {
+    const feel = latest.temp > 30.5 ? "a bit warm" : latest.temp < 20 ? "cool" : "comfortable";
+    bits.push(`Temperature is ${fmt("temp", latest.temp)}°C (${feel})`);
+  }
+  if (latest.hum != null) {
+    const feel = latest.hum < 30 ? "dry" : latest.hum > 70 ? "damp" : "comfortable moisture";
+    bits.push(`Humidity is ${fmt("hum", latest.hum)}% (${feel})`);
+  }
+  return bits.join(", ");
+}
 
 export async function answerPodQuestion(
   arg1: AskInput | string,
@@ -352,7 +383,7 @@ export async function answerPodQuestion(
   // Deterministic honesty guard for unsupported sensors or medical diagnosis
   if (/\b(co2|carbon dioxide|pm2\.?5|pm10|radon|pollen|cure|asthma attack|disease|diagnos|bronchitis)\b/i.test(qLower)) {
     return {
-      answer: "I don't have data for that. This EcoVital pod measures relative dust index (0-100%), relative air index (0-100%), temperature (°C), and humidity (%). It does not have a calibrated CO₂ or PM2.5 sensor and cannot provide medical advice or diagnosis.",
+      answer: "I don't have data for that. This EcoVital pod measures everyday room comfort — dust level (0–100%, where lower is cleaner), air freshness (0–100%, where higher is cleaner), temperature (°C), and humidity (%). It does not have a calibrated CO₂ or PM2.5 sensor and cannot provide medical advice or diagnosis. Would you like me to check how fresh or comfortable the room feels right now?",
       citations: citations.length ? citations : ["sensor & medical honesty guard"],
       source: "template",
     };
@@ -360,28 +391,46 @@ export async function answerPodQuestion(
 
   if (input.hourlyBuckets.length === 0 && Object.values(input.latest).every((v) => v === null || v === undefined)) {
     return {
-      answer: "I don't have data for that yet. This pod has not uploaded readings in the selected window.",
+      answer: "I don't have data for that yet because this pod hasn't sent its first reading. Make sure the pod is plugged in and showing green Wi-Fi bars, then ask me again in a few seconds!",
       citations: ["no readings in window"],
       source: "template",
     };
   }
 
   try {
-    const prompt = `Question: ${input.question}\nCompact Pod Data (JSON):\n${JSON.stringify(input)}`;
-    const raw = await geminiText(prompt, ASK_SYSTEM);
+    const prompt = `User question: ${input.question}\nRoom & Sensor Data (JSON):\n${JSON.stringify(input)}`;
+    const raw = await geminiText(prompt, ASK_SYSTEM, 420);
     const cleaned = raw.replace(/[*_`#]/g, "").trim();
     if (cleaned.length > 10) {
       return { answer: cleaned, citations, source: "gemini" };
     }
-  } catch { /* fall back to grounded deterministic answer */ }
+  } catch { /* fall back to friendly grounded answer */ }
 
-  // Deterministic grounded answer from computed buckets
+  // Friendly, plain-English fallback answer for non-technical users
   const parts: string[] = [];
-  const cur = METRIC_KEYS.filter((k) => input.latest[k] !== null && input.latest[k] !== undefined)
-    .map((k) => `${METRICS[k].label} ${fmt(k, input.latest[k])}${METRICS[k].unit} (Measured)`).join(", ");
-  if (cur) parts.push(`Right now on ${input.deviceName}: ${cur}.`);
+  const plainNow = describeReadingPlainly(input.latest);
 
-  if (input.hourlyBuckets.length > 0) {
+  if (/\b(mean|explain|understand|what is|what are|help|numbers|work)\b/i.test(qLower)) {
+    parts.push(
+      `Here is an easy way to read ${input.deviceName}: Air index (0–100%) shows how fresh the air is — closer to 100% is best. Dust level (0–100%) shows airborne dust — closer to 0% is cleanest. Temperature (°C) and Humidity (%) show how warm and moist the air feels.`,
+    );
+    if (plainNow) parts.push(`Right now (Measured): ${plainNow}.`);
+    parts.push("Which of these readings would you like tips on improving?");
+    return { answer: parts.join(" "), citations: Array.from(new Set(citations)), source: "template" };
+  }
+
+  if (plainNow) {
+    parts.push(`Right now in ${input.deviceName} (Measured): ${plainNow}.`);
+  }
+
+  if (qLower.includes("speak") || qLower.includes("said") || qLower.includes("alert") || qLower.includes("why")) {
+    if (input.recentEvents.length > 0) {
+      const ev = input.recentEvents[0];
+      parts.push(`Earlier at ${ev.time}, the pod spoke out loud: "${ev.text}"`);
+    } else {
+      parts.push("The pod hasn't needed to speak an alert recently because readings have stayed within comfortable limits.");
+    }
+  } else if (input.hourlyBuckets.length > 0) {
     let worstAir = input.hourlyBuckets[0];
     let highestDust = input.hourlyBuckets[0];
     for (const b of input.hourlyBuckets) {
@@ -389,22 +438,25 @@ export async function answerPodQuestion(
       if (b.dust !== null && (highestDust.dust === null || b.dust > highestDust.dust)) highestDust = b;
     }
     if (qLower.includes("air") && worstAir.air !== null) {
-      parts.push(`The lowest air index was ${worstAir.air.toFixed(0)}% during ${worstAir.timeRange}; opening windows for cross-ventilation helps refresh the room.`);
+      parts.push(`Looking back, the air felt stuffiest around ${worstAir.timeRange} (air freshness dropped to ${worstAir.air.toFixed(0)}%). Opening windows on opposite sides of the room is the easiest way to let fresh breeze in.`);
       citations.unshift(`used ${worstAir.timeRange} readings`);
     } else if (qLower.includes("dust") && highestDust.dust !== null) {
-      parts.push(`The highest dust index was ${highestDust.dust.toFixed(0)}% during ${highestDust.timeRange}; keeping windows closed during dusty gusts and damp-wiping surfaces may help.`);
+      parts.push(`The room was dustiest during ${highestDust.timeRange} (dust level reached ${highestDust.dust.toFixed(0)}%). Closing road-facing windows when it is windy outside and wiping desks with a damp cloth helps keep dust down.`);
       citations.unshift(`used ${highestDust.timeRange} readings`);
     } else if (worstAir.air !== null && highestDust.dust !== null) {
-      parts.push(`Across ${input.windowLabel}, the lowest air index was ${worstAir.air.toFixed(0)}% (${worstAir.timeRange}) and peak dust index was ${highestDust.dust.toFixed(0)}% (${highestDust.timeRange}).`);
+      parts.push(`Over the ${input.windowLabel}, the room was stuffiest around ${worstAir.timeRange} (${worstAir.air.toFixed(0)}% air freshness) and dustiest around ${highestDust.timeRange} (${highestDust.dust.toFixed(0)}% dust).`);
     }
   }
+
   const fKeys = METRIC_KEYS.filter((k) => input.forecasts[k]);
   if (fKeys.length && (qLower.includes("forecast") || qLower.includes("next") || qLower.includes("trend") || qLower.includes("estimate"))) {
     const k = fKeys[0];
     const f = input.forecasts[k]!;
-    parts.push(`Estimated 10-minute trend for ${METRICS[k].label}: ${f.trend} toward ${fmt(k, f.predicted)}${METRICS[k].unit} (${f.confidence} confidence).`);
+    parts.push(`Looking ahead, our 10-minute estimate shows ${METRICS[k].label.toLowerCase()} is ${f.trend} toward ${fmt(k, f.predicted)}${METRICS[k].unit}.`);
     citations.push("10-min linear trend estimate");
   }
+
+  parts.push("Would you like me to suggest a quick way to make the room more comfortable, or check another time of day?");
 
   return {
     answer: parts.join(" ") || "I don't have data for that time range.",
@@ -427,14 +479,14 @@ export interface InsightStats {
 }
 
 export async function generateInsightText(stats: InsightStats): Promise<{ text: string; source: "gemini" | "template" }> {
-  const sys = `Write a calm 2-sentence daily/weekly room summary from the provided computed statistics ONLY.
-Do not invent numbers. Never use ug/m3 or ppm for dust or air index. End with the practical suggestion.`;
+  const sys = `You are EcoVital's friendly room guide. Write a warm, easy-to-understand 2-to-3 sentence daily/weekly summary for a non-technical user (like a teacher or parent) using ONLY the provided statistics.
+Explain when the room felt most comfortable, when it needed attention, and end with the practical everyday suggestion. Never invent numbers and never use technical units like ug/m3 or ppm.`;
   try {
-    const raw = await geminiText(JSON.stringify(stats), sys);
+    const raw = await geminiText(JSON.stringify(stats), sys, 260);
     const cleaned = raw.replace(/[*_`#]/g, "").trim();
     if (cleaned.length >= 20) return { text: cleaned, source: "gemini" };
   } catch { /* fallback */ }
-  const text = `${stats.deviceName} (${stats.period}): Best room conditions were around ${stats.bestHour}, while ${stats.worstHour} saw the most ${stats.worstMetric.toLowerCase()} activity (${stats.alertsCount} alert${stats.alertsCount === 1 ? "" : "s"}, ${stats.comparedToPrev}). Suggestion: ${stats.suggestion}`;
+  const text = `In ${stats.deviceName}, the air felt most comfortable around ${stats.bestHour}, while ${stats.worstHour} was the busiest time for ${stats.worstMetric.toLowerCase()} (${stats.alertsCount} spoken alert${stats.alertsCount === 1 ? "" : "s"}, ${stats.comparedToPrev}). Everyday tip: ${stats.suggestion}`;
   return { text, source: "template" };
 }
 

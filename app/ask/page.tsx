@@ -4,9 +4,10 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
 
 const SUGGESTED_QUESTIONS = [
+  "How does the air in this room feel right now?",
+  "Can you explain what these sensor numbers mean in simple words?",
   "Why did the pod speak earlier today?",
   "When was the room dustiest in the last 24 hours?",
-  "Is the classroom comfortable right now?",
   "What is the CO2 or PM2.5 in ug/m3 right now?",
   "Does this air quality cause asthma or cure headaches?",
 ];

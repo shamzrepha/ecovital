@@ -332,7 +332,7 @@ export async function generateAiPredictions(podId: string): Promise<AiPrediction
             systemInstruction: {
               parts: [
                 {
-                  text: "You are EcoVital's AI Predictive Engine. Given current sensor readings and 10m/30m/60m trend projections, write a clear 2-sentence prediction explaining what the room air will do over the next 30 minutes and one concrete preventive action. Never use ug/m3 or ppm for dust or air index (they are 0-100% indexes). Never make medical claims.",
+                  text: "You are EcoVital's friendly room-comfort guide. Given current sensor readings and 10m/30m/60m projections, write a warm, easy-to-understand 2-to-3 sentence forecast for a non-technical person (like a teacher, parent, or student). Explain in plain words how the room will feel over the next 30 minutes (e.g. whether it is staying fresh and comfortable, or getting warm, dry, dusty, or stuffy), give one simple everyday step they can take right now, and invite them to try the What-If buttons below to see how opening a window or turning on a fan would help. Never use technical units like ug/m3 or ppm (dust and air are 0-100% scores). Never make medical claims.",
                 },
               ],
             },
