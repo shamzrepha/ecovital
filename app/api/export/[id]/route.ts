@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, iso } from "@/lib/db";
 import { classify } from "@/lib/config";
+import { errorResponse, requirePodOwner } from "@/lib/session";
 
 export const runtime = "nodejs";
 
@@ -13,6 +14,7 @@ const SPAN_MS: Record<string, number> = {
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  try { await requirePodOwner(req, id); } catch (e) { return errorResponse(e); }
   const range = req.nextUrl.searchParams.get("range") || "24h";
   const span = SPAN_MS[range] ?? SPAN_MS["24h"];
   const since = iso(Date.now() - span);

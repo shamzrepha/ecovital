@@ -1,18 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { generateAiPredictions } from "@/lib/ai-predict";
 import { db, iso } from "@/lib/db";
+import { errorResponse, requirePodOwner } from "@/lib/session";
 
 export const runtime = "nodejs";
 
-export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  try { await requirePodOwner(req, id); } catch (e) { return errorResponse(e); }
   const report = await generateAiPredictions(id);
   return NextResponse.json(report);
 }
 
 // POST allows creating a spoken predictive event on demand so the user/pod can hear the AI prediction out loud
-export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  try { await requirePodOwner(req, id); } catch (e) { return errorResponse(e); }
   const report = await generateAiPredictions(id);
   const sql = await db();
   const ins = await sql`

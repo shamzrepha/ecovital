@@ -211,15 +211,9 @@ export default function SettingsPage() {
           <section className="card">
             <h2>Data Export &amp; Account Privacy</h2>
             <p className="note">
-              Download raw sensor readings as CSV or delete your personal data and unclaim all pods.
+              Export a pod’s readings as CSV from its page or from the home screen. You can also delete your account and personal data here, which unlinks all your pods.
             </p>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <a className="btn small" href="/api/export/demo-node?range=24h" download>
-                ⬇ Export Demo Pod CSV (24h)
-              </a>
-              <a className="btn small" href="/api/export/demo-node?range=7d" download>
-                ⬇ Export Demo Pod CSV (7d)
-              </a>
               <button type="button" className="btn small danger" onClick={deleteAccountAndData}>
                 Delete Account &amp; Personal Data
               </button>

@@ -385,19 +385,5 @@ export async function generateAiPredictions(podId: string): Promise<AiPrediction
     preventiveAction,
   };
 
-  // Optional Firebase Realtime Database sync if FIREBASE_DATABASE_URL is configured
-  const fbUrl =
-    process.env.FIREBASE_DATABASE_URL ||
-    process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL ||
-    "https://saryx-robot-shamz-default-rtdb.europe-west1.firebasedatabase.app";
-  if (fbUrl && fbUrl.startsWith("https://")) {
-    const cleanBase = fbUrl.replace(/\/+$/, "");
-    fetch(`${cleanBase}/ecovital/predictions/${encodeURIComponent(podId)}.json`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(report),
-    }).catch(() => {});
-  }
-
   return report;
 }

@@ -13,7 +13,7 @@ const SUGGESTED_QUESTIONS = [
 
 function AskInner() {
   const searchParams = useSearchParams();
-  const initialPod = searchParams.get("pod") || "demo-node";
+  const initialPod = searchParams.get("pod") || "";
 
   const [nodes, setNodes] = useState<any[]>([]);
   const [podId, setPodId] = useState(initialPod);
@@ -22,13 +22,13 @@ function AskInner() {
   const [busy, setBusy] = useState(false);
 
   const loadHistory = useCallback(async (id: string) => {
-    const [nRes, cRes] = await Promise.all([
-      fetch("/api/nodes", { cache: "no-store" }),
-      fetch(`/api/ask?podId=${encodeURIComponent(id)}`, { cache: "no-store" }),
-    ]);
-    const nJson = await nRes.json();
-    const cJson = await cRes.json();
-    if (nJson.nodes) setNodes(nJson.nodes);
+    const nJson = await fetch("/api/nodes", { cache: "no-store" }).then((r) => r.json());
+    if (nJson.nodes) {
+      setNodes(nJson.nodes);
+      if (!id && nJson.nodes.length) { setPodId(nJson.nodes[0].id); return; }
+    }
+    if (!id) return;
+    const cJson = await fetch(`/api/ask?podId=${encodeURIComponent(id)}`, { cache: "no-store" }).then((r) => r.json());
     setMessages(cJson.messages ?? []);
   }, []);
 

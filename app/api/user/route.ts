@@ -1,50 +1,54 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, iso } from "@/lib/db";
-import { DEFAULT_USER, ensureDefaultUser } from "@/lib/pods";
+import { errorResponse, requireUser } from "@/lib/session";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
-  const userId = req.nextUrl.searchParams.get("userId") || DEFAULT_USER.id;
-  await ensureDefaultUser(userId);
-  const sql = await db();
-  const rows = await sql`SELECT id, email, name, role, prefs FROM users WHERE id = ${userId}`;
-  const notifs = await sql`
-    SELECT id, device_id, channel, title, body, (extract(epoch from sent_at) * 1000)::float8 AS sent_ms
-    FROM notifications_log
-    ORDER BY sent_at DESC LIMIT 25
-  `;
-  const u = rows[0] || { id: DEFAULT_USER.id, email: DEFAULT_USER.email, name: DEFAULT_USER.name, prefs: {} };
-  const prefs = u.prefs || {};
-  return NextResponse.json({
-    user: {
-      id: u.id,
-      email: u.email,
-      name: u.name,
-      language: prefs.language || "en-NG",
-      voice: prefs.voice || "Kore",
-      voiceSpeed: prefs.voiceSpeed || "normal",
-      quietStart: Number(prefs.quietStartHour ?? 22),
-      quietEnd: Number(prefs.quietEndHour ?? 7),
-      notifyMetrics: prefs.metrics || { dust: true, air: true, temp: true, hum: true },
-    },
-    notifications: notifs.map((n: any) => ({
-      id: Number(n.id),
-      podId: n.device_id,
-      title: n.title,
-      body: n.body,
-      delivered: true,
-      createdAt: iso(Number(n.sent_ms)),
-    })),
-  });
+  try {
+    const me = await requireUser(req);
+    const sql = await db();
+    const rows = await sql`SELECT id, email, name, role, prefs FROM users WHERE id = ${me.id}`;
+    const notifs = await sql`
+      SELECT id, device_id, channel, title, body, (extract(epoch from sent_at) * 1000)::float8 AS sent_ms
+      FROM notifications_log WHERE user_id = ${me.id}
+      ORDER BY sent_at DESC LIMIT 25
+    `;
+    const u = rows[0];
+    const prefs = u.prefs || {};
+    return NextResponse.json({
+      user: {
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        role: u.role,
+        language: prefs.language || "en-NG",
+        voice: prefs.voice || "Kore",
+        voiceSpeed: prefs.voiceSpeed || "normal",
+        quietEnabled: prefs.quietEnabled === true,
+        quietStart: Number(prefs.quietStartHour ?? 22),
+        quietEnd: Number(prefs.quietEndHour ?? 7),
+        notifyMetrics: prefs.metrics || { dust: true, air: true, temp: true, hum: true },
+      },
+      notifications: notifs.map((n: any) => ({
+        id: Number(n.id),
+        podId: n.device_id,
+        title: n.title,
+        body: n.body,
+        delivered: true,
+        createdAt: iso(Number(n.sent_ms)),
+      })),
+    });
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
 
 export async function POST(req: NextRequest) {
   try {
+    const me = await requireUser(req);
     const body = await req.json();
-    const id = String(body.id || DEFAULT_USER.id);
-    const email = String(body.email || DEFAULT_USER.email).trim();
-    const name = String(body.name || DEFAULT_USER.name).trim();
+    const name = String(body.name || me.name).trim().slice(0, 60) || me.name;
     const language = ["en-NG", "ig", "yo", "ha"].includes(body.language) ? body.language : "en-NG";
     const voice = String(body.voice || "Kore");
     const voiceSpeed = ["slow", "normal", "fast"].includes(body.voiceSpeed) ? body.voiceSpeed : "normal";
@@ -56,7 +60,7 @@ export async function POST(req: NextRequest) {
       language,
       voice,
       voiceSpeed,
-      quietEnabled: true,
+      quietEnabled: body.quietEnabled !== false,
       quietStartHour,
       quietEndHour,
       quietStart: `${String(quietStartHour).padStart(2, "0")}:00`,
@@ -65,27 +69,28 @@ export async function POST(req: NextRequest) {
     };
 
     const sql = await db();
-    await sql`
-      INSERT INTO users (id, email, name, role, prefs)
-      VALUES (${id}, ${email}, ${name}, 'owner', ${JSON.stringify(prefs)}::jsonb)
-      ON CONFLICT (id) DO UPDATE SET
-        email = EXCLUDED.email,
-        name = EXCLUDED.name,
-        prefs = EXCLUDED.prefs
-    `;
+    await sql`UPDATE users SET name = ${name}, prefs = ${JSON.stringify(prefs)}::jsonb WHERE id = ${me.id}`;
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "Failed to save settings" }, { status: 400 });
+  } catch (e) {
+    return errorResponse(e);
   }
 }
 
 export async function DELETE(req: NextRequest) {
-  const userId = req.nextUrl.searchParams.get("userId") || DEFAULT_USER.id;
-  const sql = await db();
-  await sql`UPDATE pods SET claimed_by = NULL, device_token = NULL, token_delivered = false WHERE claimed_by = ${userId}`;
-  await sql`DELETE FROM chat_messages WHERE user_id = ${userId}`;
-  await sql`DELETE FROM notifications_log WHERE user_id = ${userId}`;
-  await sql`DELETE FROM push_subscriptions WHERE user_id = ${userId}`;
-  await sql`DELETE FROM users WHERE id = ${userId}`;
-  return NextResponse.json({ ok: true, message: "Account and personal data deleted; pods unclaimed." });
+  try {
+    const me = await requireUser(req);
+    const userId = me.id;
+    const sql = await db();
+    await sql`UPDATE pods SET claimed_by = NULL, device_token = NULL, token_delivered = false, share_token = NULL WHERE claimed_by = ${userId}`;
+    await sql`DELETE FROM chat_messages WHERE user_id = ${userId}`;
+    await sql`DELETE FROM notifications_log WHERE user_id = ${userId}`;
+    await sql`DELETE FROM push_subscriptions WHERE user_id = ${userId}`;
+    await sql`DELETE FROM rooms WHERE owner_id = ${userId}`;
+    await sql`DELETE FROM users WHERE id = ${userId}`;
+    const res = NextResponse.json({ ok: true, message: "Account and personal data deleted; pods unlinked." });
+    res.headers.set("set-cookie", "ecovital_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
+    return res;
+  } catch (e) {
+    return errorResponse(e);
+  }
 }

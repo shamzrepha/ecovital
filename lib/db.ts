@@ -166,6 +166,16 @@ const SCHEMA = [
      locked_until timestamptz,
      PRIMARY KEY (user_id, code)
    )`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash text`,
+  `CREATE TABLE IF NOT EXISTS leads (
+     id bigserial PRIMARY KEY,
+     name text NOT NULL,
+     email text NOT NULL,
+     organisation text,
+     message text,
+     pods int,
+     created_at timestamptz NOT NULL DEFAULT now()
+   )`,
   `CREATE TABLE IF NOT EXISTS ai_logs (
      id bigserial PRIMARY KEY,
      ts timestamptz NOT NULL DEFAULT now(),

@@ -207,8 +207,7 @@ test("claim explains bad-key", async () => {
   });
   assert.equal(res.ok, false);
   assert.ok(res.error);
-  assert.match(res.error!, /reaching the server, but the server rejected its key/i);
-  assert.match(res.error!, /pod-badkey-1/);
+  assert.match(res.error!, /device key does not match/i);
 });
 
 test("shared key rejected after token confirmation", async () => {

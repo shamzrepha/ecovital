@@ -255,26 +255,6 @@ export async function ingest(
   await scoreForecasts(sql, id, now);
   await scorePredictiveEvents(sql, id, now);
 
-  // 6. Optional Firebase Realtime Database mirror for remote clients
-  const fbUrl =
-    process.env.FIREBASE_DATABASE_URL ||
-    process.env.NEXT_PUBLIC_FIREBASE_DATABASE_URL ||
-    "https://saryx-robot-shamz-default-rtdb.europe-west1.firebasedatabase.app";
-  if (fbUrl && fbUrl.startsWith("https://")) {
-    const cleanBase = fbUrl.replace(/\/+$/, "");
-    fetch(`${cleanBase}/ecovital/pods/${encodeURIComponent(id)}.json`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id,
-        updatedAt: iso(now),
-        latest: values,
-        status: next.status,
-        lastSpoken: result.speak ?? null,
-      }),
-    }).catch(() => {});
-  }
-
   return result;
 }
 

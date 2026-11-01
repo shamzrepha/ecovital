@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import StripChart from "./StripChart";
-import DemoPanel from "./DemoPanel";
 import AiPredictorPanel from "./AiPredictorPanel";
 import { ago, useVoice } from "./useVoice";
 import {
@@ -20,14 +19,13 @@ import {
 } from "@/lib/config";
 
 const RANGES = ["1h", "6h", "24h", "7d"];
-const DEMO = process.env.NEXT_PUBLIC_DEMO !== "0";
 
 function levelClass(s: string | undefined): "good" | "watch" | "bad" {
   const l = parseStatus(s).level;
   return l === "ok" ? "good" : l;
 }
 
-export default function NodeView({ id, readOnly = false }: { id: string; readOnly?: boolean }) {
+export default function NodeView({ id, readOnly = false, shareToken }: { id: string; readOnly?: boolean; shareToken?: string }) {
   const [range, setRange] = useState("1h");
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +48,7 @@ export default function NodeView({ id, readOnly = false }: { id: string; readOnl
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/nodes/${encodeURIComponent(id)}?range=${range}`, { cache: "no-store" });
+      const res = await fetch(`/api/nodes/${encodeURIComponent(id)}?range=${range}${shareToken ? `&share=${encodeURIComponent(shareToken)}` : ""}`, { cache: "no-store" });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
       setData(j);
@@ -58,7 +56,7 @@ export default function NodeView({ id, readOnly = false }: { id: string; readOnl
     } catch (e: any) {
       setError(e.message);
     }
-  }, [id, range]);
+  }, [id, range, shareToken]);
 
   useEffect(() => {
     load();
@@ -289,20 +287,6 @@ export default function NodeView({ id, readOnly = false }: { id: string; readOnl
           </div>
         )}
       </div>
-
-      {!readOnly && DEMO && dev.id === "demo-node" && (
-        <DemoPanel
-          onDone={(sp) => {
-            load();
-            if (sp && voice.on) voice.play(sp.eventId, sp.text);
-          }}
-        />
-      )}
-      {!readOnly && DEMO && dev.id !== "demo-node" && (
-        <p className="note" style={{ marginTop: -6, marginBottom: 14 }}>
-          Simulator buttons are on the <Link href="/node/demo-node">demo node</Link>.
-        </p>
-      )}
 
       {/* Multi-Horizon AI Predictive Engine & What-If Simulator */}
       <AiPredictorPanel
@@ -797,7 +781,7 @@ function Header(props: {
 }) {
   return (
     <header className="top">
-      <Link className="brand" href="/">EcoVital</Link>
+      <Link className="brand" href={props.readOnly ? "/" : "/dashboard"}>EcoVital</Link>
       <span className="crumb">
         / {props.name}
         {props.location ? ` · ${props.location}` : ""}

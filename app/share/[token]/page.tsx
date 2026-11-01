@@ -6,7 +6,7 @@ export default async function SharePodPage({ params }: { params: Promise<{ token
   const { token } = await params;
   const sql = await db();
   const rows = await sql`SELECT device_id FROM pods WHERE share_token = ${token} LIMIT 1`;
-  const podId = rows[0]?.device_id || (token === "demo" ? "demo-node" : null);
+  const podId = rows[0]?.device_id ?? null;
 
   if (!podId) {
     return (
@@ -18,5 +18,5 @@ export default async function SharePodPage({ params }: { params: Promise<{ token
     );
   }
 
-  return <NodeView id={podId} readOnly={true} />;
+  return <NodeView id={podId} readOnly={true} shareToken={token} />;
 }

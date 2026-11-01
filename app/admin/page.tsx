@@ -19,7 +19,7 @@ export default function AdminPage() {
   const load = useCallback(async () => {
     const [oRes, nRes] = await Promise.all([
       fetch("/api/ota", { cache: "no-store" }),
-      fetch("/api/nodes", { cache: "no-store" }),
+      fetch("/api/nodes?all=1", { cache: "no-store" }),
     ]);
     const oJson = await oRes.json();
     const nJson = await nRes.json();
@@ -31,6 +31,17 @@ export default function AdminPage() {
     load();
     try { setAdminKey(sessionStorage.getItem("ev-admin-key") || ""); } catch {}
   }, [load]);
+
+  async function downloadFirmware() {
+    setMsg("Preparing firmware…");
+    const res = await fetch("/api/download/firmware", { headers: { "x-admin-key": adminKey } });
+    if (!res.ok) { setMsg((await res.json().catch(() => ({}))).error || "Could not download the firmware."); return; }
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = "ecovital_pod.zip"; a.click();
+    URL.revokeObjectURL(url);
+    setMsg("Downloaded ecovital_pod.zip, already set to this site and its device key. Open the folder in Arduino IDE and flash it once over USB.");
+  }
 
   async function publishOta(e: React.FormEvent) {
     e.preventDefault();
@@ -124,6 +135,8 @@ export default function AdminPage() {
           <div className="form-row">
             <label htmlFor="ota-key">Admin key (your ADMIN_KEY or DEVICE_KEY from Vercel)</label>
             <input id="ota-key" className="input" type="password" value={adminKey} onChange={(e) => setAdminKey(e.target.value)} required />
+            <span className="note">Updates: Arduino IDE → Sketch → Export Compiled Binary, then upload the file ending <code>.ino.bin</code>. The version above must equal <code>FW_VERSION</code> inside that firmware.</span>
+            <div><button type="button" className="btn small" onClick={downloadFirmware} disabled={!adminKey}>Download pod firmware (pre-set to this site)</button></div>
           </div>
 
           <div className="form-row">

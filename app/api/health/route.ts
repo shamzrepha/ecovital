@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
+import { getSessionUser } from "@/lib/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // GET /api/health: is the server set up for pods, and which pods has it heard from (or turned away)?
 // Shows no secrets.
-export async function GET() {
+export async function GET(req: Request) {
+  const me = await getSessionUser(req).catch(() => null);
   const effKey = process.env.DEVICE_KEY || "evk_6450a3caa5e01e24638ef4e6";
   const out: any = {
     ok: true,
@@ -20,7 +22,7 @@ export async function GET() {
     const sql = await db();
     const rows = await sql`SELECT device_id, result, fw, (extract(epoch from last_at) * 1000)::float8 AS t FROM pod_contact ORDER BY last_at DESC LIMIT 10`;
     out.database = "ok";
-    out.contacts = rows.map((r: any) => ({ deviceId: r.device_id, result: r.result, fw: r.fw, secondsAgo: Math.round((Date.now() - Number(r.t)) / 1000) }));
+    if (me?.role === "admin") out.contacts = rows.map((r: any) => ({ deviceId: r.device_id, result: r.result, fw: r.fw, secondsAgo: Math.round((Date.now() - Number(r.t)) / 1000) }));
   } catch (e: any) {
     out.database = "error: " + String(e?.message ?? e).slice(0, 120);
     out.ok = false;

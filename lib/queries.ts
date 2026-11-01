@@ -39,7 +39,7 @@ export function podStateLabel(online: boolean, lastSeen: number | null, now: num
   };
 }
 
-export async function getNodes() {
+export async function getNodes(ownerId?: string) {
   const sql = await db();
   const now = Date.now();
   const rows = await sql`
@@ -58,8 +58,11 @@ export async function getNodes() {
     FROM devices d
     LEFT JOIN pods p ON p.device_id = d.id
     LEFT JOIN pod_firmware_target t ON t.device_id = d.id
+    WHERE ${ownerId ?? null}::text IS NULL OR p.claimed_by = ${ownerId ?? null}
     ORDER BY d.simulated, d.last_seen DESC NULLS LAST`;
-  const tot = await sql`SELECT count(*) AS n FROM readings WHERE ts > now() - interval '24 hours'`;
+  const tot = await sql`SELECT count(*) AS n FROM readings r
+                        WHERE r.ts > now() - interval '24 hours'
+                          AND (${ownerId ?? null}::text IS NULL OR r.device_id IN (SELECT device_id FROM pods WHERE claimed_by = ${ownerId ?? null}))`;
   const nodes = rows.map((r) => {
     const lastSeen = num(r.last_seen);
     const online = lastSeen !== null && now - lastSeen < ONLINE_MS;

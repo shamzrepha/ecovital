@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "node:fs";
 import path from "node:path";
+import { adminOk } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,6 +55,7 @@ function zip(entries: { name: string; data: Buffer }[]): Buffer {
 }
 
 export async function GET(req: NextRequest) {
+  if (!adminOk(req)) return NextResponse.json({ error: "Admin key required." }, { status: 401 });
   const origin = req.nextUrl.origin;
   const ino = readFw("ecovital_pod.ino");
   if (!ino) return NextResponse.json({ error: "Firmware source is not bundled with this deployment." }, { status: 404 });

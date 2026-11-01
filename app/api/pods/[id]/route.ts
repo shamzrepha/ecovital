@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { updatePodSettings } from "@/lib/pods";
+import { errorResponse, requirePodOwner } from "@/lib/session";
 
 export const runtime = "nodejs";
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+    await requirePodOwner(req, id);
     const body = await req.json();
     const res = await updatePodSettings(id, {
       nickname: body.nickname,
@@ -18,7 +20,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       resetThresholds: Boolean(body.resetThresholds),
     });
     return NextResponse.json(res);
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || "Failed to update pod" }, { status: 400 });
+  } catch (e) {
+    return errorResponse(e);
   }
 }

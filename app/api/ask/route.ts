@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, iso } from "@/lib/db";
 import { answerPodQuestion } from "@/lib/ai";
+import { errorResponse, requirePodOwner } from "@/lib/session";
 
 export const runtime = "nodejs";
 
 export async function GET(req: NextRequest) {
-  const podId = req.nextUrl.searchParams.get("podId") || "demo-node";
+  const podId = req.nextUrl.searchParams.get("podId") || "";
+  let user;
+  try { user = await requirePodOwner(req, podId); } catch (e) { return errorResponse(e); }
   const sql = await db();
   const rows = await sql`
     SELECT id, device_id, role, text, data_refs, (extract(epoch from ts) * 1000)::float8 AS ts_ms
     FROM chat_messages
-    WHERE device_id = ${podId}
+    WHERE device_id = ${podId} AND user_id = ${user.id}
     ORDER BY ts ASC
     LIMIT 40
   `;
@@ -29,9 +32,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const podId = String(body.podId || "demo-node");
-    const question = String(body.question || "").trim();
-    const userId = String(body.userId || "owner-shamaryah");
+    const podId = String(body.podId || "");
+    const question = String(body.question || "").trim().slice(0, 600);
+    const userId = (await requirePodOwner(req, podId)).id;
     if (!question) {
       return NextResponse.json({ error: "Question is required" }, { status: 400 });
     }
@@ -112,6 +115,6 @@ export async function POST(req: NextRequest) {
       source: ans.source,
     });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Failed to answer question" }, { status: 500 });
+    return errorResponse(e);
   }
 }

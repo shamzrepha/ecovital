@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
 import { getNodes } from "@/lib/queries";
+import { errorResponse, requireUser } from "@/lib/session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+// The signed-in user's own pods. Admin accounts may pass ?all=1 to see the whole fleet.
+export async function GET(req: Request) {
   try {
-    return NextResponse.json(await getNodes(), { headers: { "cache-control": "no-store" } });
-  } catch (e: any) {
-    return NextResponse.json({ error: String(e?.message ?? e).slice(0, 300) }, { status: 500 });
+    const user = await requireUser(req);
+    const all = user.role === "admin" && new URL(req.url).searchParams.get("all") === "1";
+    return NextResponse.json(await getNodes(all ? undefined : user.id), { headers: { "cache-control": "no-store" } });
+  } catch (e) {
+    return errorResponse(e);
   }
 }

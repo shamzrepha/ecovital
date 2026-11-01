@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createFirmwareRelease, listFirmwareState } from "@/lib/pods";
 import { adminOk } from "@/lib/auth";
+import { errorResponse, requireUser } from "@/lib/session";
 
 export const runtime = "nodejs";
 
-export async function GET() {
-  const state = await listFirmwareState();
-  return NextResponse.json(state);
+export async function GET(req: NextRequest) {
+  try {
+    const u = await requireUser(req);
+    if (u.role !== "admin") return NextResponse.json({ error: "Admin account required." }, { status: 403 });
+    return NextResponse.json(await listFirmwareState());
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
 
 export async function POST(req: NextRequest) {

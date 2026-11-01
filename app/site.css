@@ -1,0 +1,64 @@
+/* Business page, sign in / sign up, and the Add pod wizard. Uses the tokens from globals.css. */
+.who { font-size: 13px; color: var(--ink2); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.lp-inner { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+.lp-hero { padding: 56px 0 48px; background: linear-gradient(180deg, color-mix(in srgb, var(--brand-lime) 14%, var(--paper)), var(--paper)); border-bottom: 1px solid var(--rule); }
+.lp-hero-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 40px; align-items: center; }
+.lp-kicker { text-transform: uppercase; letter-spacing: 0.08em; font-size: 12.5px; font-weight: 650; color: var(--brand-leaf); margin: 0 0 10px; }
+.lp-hero h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.08; letter-spacing: -0.03em; margin: 0 0 16px; font-weight: 700; }
+.lp-lead { font-size: 17px; color: var(--ink2); max-width: 60ch; margin: 0 0 22px; }
+.lp-lead.small { font-size: 15.5px; }
+.lp-cta { display: flex; gap: 10px; flex-wrap: wrap; }
+.lp-btn { padding: 10px 18px; font-size: 15px; }
+.lp-sample { margin: 0; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px; padding: 18px 20px; display: grid; gap: 8px; }
+.lp-sample figcaption { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink2); font-weight: 650; }
+.lp-sample q { font-size: 17px; line-height: 1.4; font-weight: 550; quotes: none; }
+.lp-sample-row { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink2); margin-bottom: 8px; }
+.lp-section { padding: 52px 0; }
+.lp-section.alt { background: var(--panel-alt); border-block: 1px solid var(--rule); }
+.lp-section h2 { font-size: clamp(24px, 3.4vw, 32px); letter-spacing: -0.02em; margin: 0 0 20px; }
+.lp-grid { display: grid; gap: 16px; }
+.lp-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.lp-card { background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 18px; }
+.lp-card h3 { margin: 0 0 6px; font-size: 17px; }
+.lp-card p { margin: 0; color: var(--ink2); font-size: 14.5px; }
+.lp-num { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--brand-deep); color: #fff; font-weight: 650; margin-bottom: 10px; }
+.lp-table { display: grid; border: 1px solid var(--rule); border-radius: 12px; overflow: hidden; background: var(--panel); }
+.lp-table > div { display: grid; grid-template-columns: 150px 190px 1fr; gap: 12px; padding: 12px 16px; border-top: 1px solid var(--rule); font-size: 14.5px; }
+.lp-table > div:first-child { border-top: 0; }
+.lp-table .u { color: var(--ink2); }
+.lp-contact { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 36px; align-items: start; }
+.lead-form { display: grid; gap: 10px; }
+.site-footer { border-top: 1px solid var(--rule); padding: 20px 0 100px; color: var(--ink2); font-size: 13px; }
+.site-footer-inner { max-width: 1120px; margin: 0 auto; padding: 0 16px; display: flex; gap: 12px; justify-content: space-between; flex-wrap: wrap; }
+@media (max-width: 820px) {
+  .lp-hero-grid, .lp-contact { grid-template-columns: 1fr; }
+  .lp-grid.three { grid-template-columns: 1fr; }
+  .lp-table > div { grid-template-columns: 1fr; gap: 2px; }
+  .desktop-nav { display: none; }
+}
+
+.auth-wrap { min-height: calc(100vh - 140px); display: grid; place-items: center; padding: 24px 16px 80px; }
+.auth-card { width: 100%; max-width: 400px; background: var(--panel); border: 1px solid var(--rule); border-radius: 14px; padding: 24px; display: grid; gap: 12px; }
+.auth-card h1 { margin: 0; font-size: 24px; letter-spacing: -0.02em; }
+.auth-card p { margin: 0; color: var(--ink2); font-size: 14px; }
+
+.steps { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 18px; padding: 0; list-style: none; }
+.steps li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink2); padding: 4px 12px 4px 4px; border: 1px solid var(--rule); border-radius: 99px; background: var(--panel); }
+.steps li b { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--rule); color: var(--ink); font-size: 12px; }
+.steps li.on { color: var(--ink); border-color: var(--brand-leaf); }
+.steps li.on b { background: var(--brand-leaf); color: #fff; }
+.steps li.done b { background: var(--good); color: #fff; }
+.code-input { font-size: 30px; letter-spacing: 0.35em; text-transform: uppercase; text-align: center; font-weight: 650; font-family: ui-monospace, "Cascadia Mono", monospace; padding: 12px; }
+.pair-status { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--rule); border-radius: 10px; background: var(--panel); font-size: 14px; }
+.pair-status.good { border-color: var(--good); }
+.pair-status.bad { border-color: var(--bad); }
+.pair-status.watch { border-color: var(--watch); }
+.wizard { max-width: 640px; margin: 0 auto; }
+.wizard .card { display: grid; gap: 14px; }
+.wizard ol.how { margin: 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14.5px; }
+.wizard-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pod-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin: 0 0 18px; }
+.pod-card { display: grid; gap: 6px; text-align: left; background: var(--panel); border: 1px solid var(--rule); border-radius: 12px; padding: 14px; cursor: pointer; text-decoration: none; color: inherit; }
+.pod-card.sel { border-color: var(--brand-leaf); box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand-leaf) 25%, transparent); }
+.pod-card .nm { font-weight: 650; font-size: 16px; }

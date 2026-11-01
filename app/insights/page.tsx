@@ -20,7 +20,7 @@ const CAP: Record<MetricKey, string> = { dust: "Dust", air: "Air", temp: "Temp",
 
 function InsightsInner() {
   const searchParams = useSearchParams();
-  const initialPod = searchParams.get("pod") || "demo-node";
+  const initialPod = searchParams.get("pod") || "";
 
   const [nodes, setNodes] = useState<any[]>([]);
   const [podId, setPodId] = useState(initialPod);
@@ -32,13 +32,13 @@ function InsightsInner() {
   const load = useCallback(async (id: string) => {
     setLoading(true);
     try {
-      const [nRes, iRes] = await Promise.all([
-        fetch("/api/nodes", { cache: "no-store" }),
-        fetch(`/api/insights/${encodeURIComponent(id)}`, { cache: "no-store" }),
-      ]);
-      const nJson = await nRes.json();
-      const iJson = await iRes.json();
-      if (nJson.nodes) setNodes(nJson.nodes);
+      const nJson = await fetch("/api/nodes", { cache: "no-store" }).then((r) => r.json());
+      if (nJson.nodes) {
+        setNodes(nJson.nodes);
+        if (!id && nJson.nodes.length) { setPodId(nJson.nodes[0].id); return; }
+      }
+      if (!id) { setData(null); return; }
+      const iJson = await fetch(`/api/insights/${encodeURIComponent(id)}`, { cache: "no-store" }).then((r) => r.json());
       setData(iJson);
     } finally {
       setLoading(false);

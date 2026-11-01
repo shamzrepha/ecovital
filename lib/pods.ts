@@ -120,7 +120,8 @@ export async function claimPodByCode(args: {
 }): Promise<ClaimResult> {
   const sql = await db();
   const userId = args.userId || DEFAULT_USER.id;
-  await ensureDefaultUser(userId, `${userId}@ecovital.local`, userId);
+  // Real accounts already exist; this only keeps scripts and tests that pass a bare user id working.
+  await sql`INSERT INTO users (id, email, name, role) VALUES (${userId}, ${userId + "@ecovital.local"}, ${userId}, 'user') ON CONFLICT DO NOTHING`;
 
   const code = args.code.trim().toUpperCase();
   if (!/^[A-Z0-9]{6}$/.test(code)) {
@@ -150,31 +151,25 @@ export async function claimPodByCode(args: {
     ORDER BY d.last_seen DESC NULLS LAST LIMIT 1`;
 
   if (!devRows.length) {
-    // Did a pod with this code reach the server but get turned away? Then say exactly that.
-    const seen = await sql`SELECT device_id, result, (extract(epoch from last_at) * 1000)::float8 AS t FROM pod_contact
-                           WHERE upper(claim) = ${code} ORDER BY last_at DESC LIMIT 1`;
-    if (seen.length && seen[0].result === "bad-key") {
-      return {
-        ok: false,
-        error: `This pod (${seen[0].device_id}) is reaching the server, but the server rejected its key. Set DEVICE_KEY on Vercel to the key inside the pod firmware (DEFAULT_KEY), redeploy, or enter that key on the pod's own Settings page. Then try again.`,
-      };
-    }
+    const status = await pairStatus(code, userId);
+    if (status.state === "bad-key") return { ok: false, error: status.message };
     const curFails = Number(lockRows[0]?.fails ?? 0) + 1;
     const lockUntil = curFails >= 5 ? iso(now + 10 * 60_000) : null;
     await sql`
       INSERT INTO claim_attempts (user_id, code, fails, locked_until)
       VALUES (${userId}, '__global__', ${curFails}, ${lockUntil}::timestamptz)
       ON CONFLICT (user_id, code) DO UPDATE SET fails = ${curFails}, locked_until = ${lockUntil}::timestamptz`;
-    return {
-      ok: false,
-      locked: curFails >= 5,
-      error: "We have not heard from a pod with that code yet. Check that the pod shows its Wi-Fi bars in green (top right of its screen) and that its app address is this site, then try again in 15 seconds. The code is the 6 characters on the pod, not its ID.",
-    };
+    return { ok: false, locked: curFails >= 5, error: status.message };
   }
 
   const dev = devRows[0];
   if (dev.claimed_by && dev.claimed_by !== userId) {
-    return { ok: false, error: "This pod is already claimed by another account. Ask the owner to remove it first." };
+    return { ok: false, error: "This pod is already linked to another account. Ask its owner to remove it from their account first, or hold the pod's BOOT button for 5 seconds to reset it." };
+  }
+  if (dev.claimed_by === userId) {
+    // Same owner entering the code again: nothing to rotate, just return the pod.
+    const again = await sql`SELECT nickname FROM pods WHERE device_id = ${dev.id}`;
+    return { ok: true, deviceId: dev.id as string, podId: dev.id as string, name: (again[0]?.nickname as string) || (dev.name as string) };
   }
 
   // Reset failed attempt counter on success
@@ -239,14 +234,74 @@ export async function claimPodByCode(args: {
   };
 }
 
+
+export interface PairStatus {
+  state: "invalid" | "heard" | "not-heard" | "bad-key" | "taken" | "yours" | "locked";
+  message: string;
+  podId?: string;
+  name?: string;
+  fw?: string | null;
+  lastSeenSecondsAgo?: number | null;
+}
+
+/**
+ * Read-only check used by the Add pod screen while the user waits: has the cloud heard from a pod showing this code?
+ * Does not claim anything. Wrong guesses are throttled so the 6-character space cannot be scanned.
+ */
+export async function pairStatus(rawCode: string, userId: string): Promise<PairStatus> {
+  const sql = await db();
+  const code = rawCode.trim().toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(code)) {
+    return { state: "invalid", message: "The pair code is 6 letters and numbers, shown on the pod's screen." };
+  }
+  const key = `status:${userId}`;
+  const lockRows = await sql`SELECT fails, (extract(epoch from locked_until) * 1000)::float8 AS lu FROM claim_attempts WHERE user_id = ${key} AND code = '__status__'`;
+  if (lockRows.length && lockRows[0].lu && Number(lockRows[0].lu) > Date.now()) {
+    return { state: "locked", message: "Too many checks in a short time. Wait a few minutes, then try again." };
+  }
+  const dev = await sql`
+    SELECT d.id, d.name, d.meta, p.claimed_by, p.nickname, (extract(epoch from d.last_seen) * 1000)::float8 AS ls
+    FROM devices d LEFT JOIN pods p ON p.device_id = d.id
+    WHERE upper(d.meta->>'claim') = ${code}
+    ORDER BY d.last_seen DESC NULLS LAST LIMIT 1`;
+  if (dev.length) {
+    await sql`DELETE FROM claim_attempts WHERE user_id = ${key} AND code = '__status__'`;
+    const d = dev[0];
+    const base = { podId: d.id as string, name: (d.nickname as string) || (d.name as string), fw: (d.meta?.fw as string) ?? null,
+                   lastSeenSecondsAgo: d.ls ? Math.round((Date.now() - Number(d.ls)) / 1000) : null };
+    if (d.claimed_by === userId) return { state: "yours", message: "This pod is already in your account.", ...base };
+    if (d.claimed_by) return { state: "taken", message: "This pod is linked to another account. Its owner can remove it, or hold the pod's BOOT button for 5 seconds to reset it.", ...base };
+    return { state: "heard", message: "Found your pod.", ...base };
+  }
+  const seen = await sql`SELECT device_id, result FROM pod_contact WHERE upper(claim) = ${code} ORDER BY last_at DESC LIMIT 1`;
+  if (seen.length && seen[0].result === "bad-key") {
+    return {
+      state: "bad-key",
+      podId: seen[0].device_id as string,
+      message: "The pod is reaching EcoVital but was turned away because its device key does not match. Re-flash it with the firmware from the Admin page, or enter the key on the pod's own Settings page.",
+    };
+  }
+  const fails = Number(lockRows[0]?.fails ?? 0) + 1;
+  const lock = fails >= 40 ? iso(Date.now() + 10 * 60_000) : null;
+  await sql`INSERT INTO claim_attempts (user_id, code, fails, locked_until) VALUES (${key}, '__status__', ${fails}, ${lock}::timestamptz)
+            ON CONFLICT (user_id, code) DO UPDATE SET fails = ${fails}, locked_until = ${lock}::timestamptz`;
+  return {
+    state: "not-heard",
+    message: "We have not heard from a pod with that code yet. Check the pod is powered, shows Wi-Fi connected, and that the code is the 6 characters on its screen (not its ID).",
+  };
+}
+
 export async function unclaimPod(deviceId: string, userId = DEFAULT_USER.id) {
   const sql = await db();
+  const own = await sql`SELECT claimed_by FROM pods WHERE device_id = ${deviceId}`;
+  if (!own.length || own[0].claimed_by !== userId) return { ok: false, error: "That pod is not in your account.", deviceId };
   await sql`
     UPDATE pods SET
       claimed_by = NULL,
       claimed_at = NULL,
       device_token = NULL,
-      token_delivered = false
+      token_delivered = false,
+      share_token = NULL
     WHERE device_id = ${deviceId}
   `;
   return { ok: true, deviceId };

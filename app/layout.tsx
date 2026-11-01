@@ -1,10 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import "./site.css";
 import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {
   title: "EcoVital — Your air, explained out loud",
-  description: "Live air quality from EcoVital pods: dust index, air index, temperature and humidity, with AI predictions, Room Score, and spoken alerts.",
+  description: "EcoVital pods watch dust, air quality, temperature and humidity in your rooms, speak what to do, and show every room in one app.",
   manifest: "/manifest.json",
 };
 export const viewport: Viewport = { width: "device-width", initialScale: 1, themeColor: "#0F6B2A" };
