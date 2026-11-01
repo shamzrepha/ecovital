@@ -1597,7 +1597,7 @@ void netTask(void*) {
         netState = 2;
         waitMs = ringCount() > BATCH ? 2000 : UPLOAD_EVERY_MS;   // catch up quickly after an outage
         if (r > 0) { lastEventId = r; lastCloudSpeakMs = millis(); playSpeech(r); }
-        if (otaPending && ringCount() == 0 && !speaking) { otaPending = false; runOta(); }
+        if (otaPending && ringCount() <= 3 && !speaking) { otaPending = false; runOta(); }   // 5 s uploads: a fresh sample is often already waiting, so do not demand an empty buffer
       } else {
         netState = 1;
         waitMs = 8000;                    // retry sooner; the readings stay buffered
