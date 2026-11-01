@@ -130,3 +130,24 @@ test("a pod enrolls itself with no key, gets a private token, and only the token
   assert.equal((await ev(tok)).authorized, false);
   assert.equal((await ev("")).authorized, true);
 });
+
+test("a queued firmware update never downgrades a pod, and a stale order is dropped", async () => {
+  const { compareVersions } = await import("../lib/ingest.ts");
+  const { createFirmwareRelease } = await import("../lib/pods.ts");
+  const { db } = await import("../lib/db.ts");
+  assert.ok(compareVersions("1.10", "1.9") > 0);
+  assert.ok(compareVersions("1.6", "1.7") < 0);
+  assert.equal(compareVersions("1.7", "1.7"), 0);
+
+  const sample = [{ ageMs: 0, dust: 10, air: 90, temp: 26, hum: 48 }];
+  await createFirmwareRelease({ version: "1.6", url: "https://example.test/1.6.bin", targetPods: ["pod-ota-1"] });
+  // The pod was flashed over USB with 1.7 after the 1.6 update was queued.
+  const same = await ingest({ id: "pod-ota-1", name: "P", meta: { fw: "1.7" } }, sample);
+  assert.equal(same.otaVersion, undefined);
+  const sql = await db();
+  assert.equal((await sql`SELECT 1 FROM pod_firmware_target WHERE device_id = 'pod-ota-1'`).length, 0);
+
+  await createFirmwareRelease({ version: "1.8", url: "https://example.test/1.8.bin", targetPods: ["pod-ota-1"] });
+  const up = await ingest({ id: "pod-ota-1", name: "P", meta: { fw: "1.7" } }, sample);
+  assert.equal(up.otaVersion, "1.8");
+});

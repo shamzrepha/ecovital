@@ -40,6 +40,18 @@ export interface IngestResult {
 
 const FRESH_MS = 90_000;
 
+/** Compare dotted versions such as "1.10" and "1.9". Returns >0 when a is newer than b. */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[.\-_]/), pb = b.split(/[.\-_]/);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] ?? "0", y = pb[i] ?? "0";
+    const nx = Number(x), ny = Number(y);
+    if (Number.isFinite(nx) && Number.isFinite(ny)) { if (nx !== ny) return nx - ny; }
+    else if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
 type Row = Record<string, any>;
 const num = (x: any): number | null => (x === null || x === undefined ? null : Number(x));
 
@@ -119,7 +131,17 @@ export async function ingest(
   const reportedFw = (info.meta?.fw as string | undefined) ?? null;
   let otaVersion: string | undefined;
   let otaUrl: string | undefined;
-  if (otaRows.length && otaRows[0].version && otaRows[0].version !== reportedFw) {
+  if (otaRows.length && otaRows[0].version && reportedFw) {
+    const target = String(otaRows[0].version);
+    const cmp = compareVersions(target, reportedFw);
+    if (cmp > 0) {
+      otaVersion = target;                 // only ever move a pod forward
+      otaUrl = String(otaRows[0].url);
+    } else {
+      // The pod is already on this version or a newer one (for example it was flashed over USB): drop the stale order.
+      await sql`DELETE FROM pod_firmware_target WHERE device_id = ${id}`;
+    }
+  } else if (otaRows.length && otaRows[0].version && !reportedFw) {
     otaVersion = String(otaRows[0].version);
     otaUrl = String(otaRows[0].url);
   }
