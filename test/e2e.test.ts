@@ -176,9 +176,9 @@ test("Ask EcoVital honesty guard & 20-scenario AI evaluation suite", async () =>
   assert.equal(suite.passed, 20, "All 20 evaluation scenarios must pass length, metric, action, and honesty checks");
 
   const pred = await generateAiPredictions(DEMO_ID);
-  assert.equal(pred.horizons.length, 3, "Must predict +10m, +30m, and +60m horizons");
-  assert.equal(pred.whatIfs.length, 4, "Must provide 4 What-If intervention scenarios");
+  assert.equal(pred.metrics.hum.predictions.length, 3, "Must predict +10m, +30m, and +60m horizons");
   assert.ok(pred.spokenForecast.length > 20, "Must provide a spoken AI forecast line");
+  assert.ok(pred.learning.note.length > 10);
 });
 
 test("bad-key contact recorded", async () => {

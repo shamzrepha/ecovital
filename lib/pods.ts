@@ -106,6 +106,17 @@ export async function verifyPodIngestKey(args: {
   return { authorized: true };
 }
 
+/** True when `key` is this pod's private token (or the shared key before the pod has confirmed its token). */
+export async function podKeyOk(deviceId: string, key: string): Promise<boolean> {
+  if (!key) return false;
+  const sql = await db();
+  const rows = await sql`SELECT device_token, token_delivered FROM pods WHERE device_id = ${deviceId}`;
+  if (!rows.length || !rows[0].device_token) return false;
+  if (key === rows[0].device_token) return true;
+  const shared = process.env.DEVICE_KEY || "";
+  return !!shared && key === shared && !rows[0].token_delivered;
+}
+
 export interface ClaimResult {
   ok: boolean;
   locked?: boolean;
@@ -337,6 +348,8 @@ export async function updatePodSettings(
     thresholds?: Partial<Record<MetricKey, ThresholdOverride>>;
     customThresholds?: Partial<Record<MetricKey, any>>;
     resetThresholds?: boolean;
+    lat?: number | null;
+    lng?: number | null;
   },
 ) {
   const sql = await db();
@@ -358,6 +371,11 @@ export async function updatePodSettings(
   }
   if (effName !== undefined) {
     await sql`UPDATE pods SET nickname = ${effName.trim()} WHERE device_id = ${deviceId}`;
+  }
+  if (patch.lat !== undefined && patch.lng !== undefined) {
+    const la = patch.lat === null ? null : Number(patch.lat), lo = patch.lng === null ? null : Number(patch.lng);
+    if (la !== null && lo !== null && (!(la >= -90 && la <= 90) || !(lo >= -180 && lo <= 180))) throw new Error("That location is not valid.");
+    await sql`UPDATE pods SET lat = ${la}, lng = ${lo} WHERE device_id = ${deviceId}`;
   }
   if (effProfile !== undefined) {
     await sql`UPDATE pods SET profile = ${effProfile} WHERE device_id = ${deviceId}`;

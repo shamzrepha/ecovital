@@ -1,0 +1,38 @@
+/* Forecast panel */
+.fc { border-left: 4px solid var(--good); }
+.fc.fc-medium { border-left-color: var(--watch); }
+.fc.fc-high { border-left-color: var(--bad); }
+.fc-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.fc-head h2 { margin: 0; }
+.fc-headline { font-size: 20px; font-weight: 650; line-height: 1.3; margin: 8px 0 6px; letter-spacing: -0.01em; }
+.fc-story { margin: 0 0 6px; font-size: 15px; line-height: 1.55; max-width: 70ch; }
+.fc-how { margin: 0 0 14px; }
+.fc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 12px 0; }
+.fc-metric { border: 1px solid var(--rule); border-radius: 12px; padding: 12px; background: var(--panel-alt); display: grid; gap: 6px; align-content: start; }
+.fc-m-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.fc-now { font-size: 14px; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.fc-now b { font-size: 22px; }
+.fc-now small, .fc-val small { color: var(--ink2); margin-left: 1px; }
+.fc-row { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 13.5px; border-top: 1px dashed var(--rule); padding-top: 6px; flex-wrap: wrap; }
+.fc-val { display: inline-flex; gap: 5px; align-items: baseline; flex-wrap: wrap; }
+.fc-val b { font-size: 16px; }
+.fc-val em { font-style: normal; font-size: 12.5px; color: var(--ink2); }
+.fc-val.watch em { color: var(--watch); }
+.fc-val.bad em { color: var(--bad); }
+.fc-range { color: var(--ink2); font-size: 12px; }
+.fc-reach { font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 4px 8px; background: color-mix(in srgb, var(--watch) 14%, transparent); color: var(--ink); }
+.fc-reach.bad { background: color-mix(in srgb, var(--bad) 16%, transparent); }
+.fc-flags { display: grid; gap: 10px; margin: 12px 0; }
+.fc-flag { border: 1px solid var(--rule); border-left-width: 4px; border-radius: 10px; padding: 10px 12px; background: var(--panel); }
+.fc-flag.flag { border-left-color: var(--bad); }
+.fc-flag.watch { border-left-color: var(--watch); }
+.fc-flag.info { border-left-color: var(--fc); }
+.fc-flag p { margin: 4px 0; font-size: 14px; }
+.fc-flag ul { margin: 4px 0 0; padding-left: 18px; font-size: 12.5px; color: var(--ink2); }
+.fc-outside { border: 1px solid var(--rule); border-radius: 10px; padding: 10px 12px; margin: 12px 0; background: var(--panel-alt); }
+.fc-outside p { margin: 4px 0 6px; font-size: 14px; }
+.fc-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+@media (max-width: 780px) {
+  .fc-headline { font-size: 18px; }
+  .fc-grid { grid-template-columns: 1fr; }
+}

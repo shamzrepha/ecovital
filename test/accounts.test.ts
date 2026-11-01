@@ -151,3 +151,19 @@ test("a queued firmware update never downgrades a pod, and a stale order is drop
   const up = await ingest({ id: "pod-ota-1", name: "P", meta: { fw: "1.7" } }, sample);
   assert.equal(up.otaVersion, "1.8");
 });
+
+test("spoken audio is private to the pod and its owner", async () => {
+  const { podKeyOk } = await import("../lib/pods.ts");
+  const { db } = await import("../lib/db.ts");
+  const sql = await db();
+  process.env.DEVICE_KEY = "shared-test-key-2";
+  const fan = await createAccount("fan@example.com", "Fan", "longenough1");
+  await ingest({ id: "pod-tts-1", name: "P", meta: { fw: "1.9", claim: "TTSX26" } }, [{ ageMs: 0, dust: 10, air: 90, temp: 26, hum: 48 }]);
+  await claimPodByCode({ code: "TTSX26", userId: fan.id });
+  await sql`UPDATE pods SET device_token = 'evtok_known', token_delivered = true WHERE device_id = 'pod-tts-1'`;
+  assert.equal(await podKeyOk("pod-tts-1", "evtok_known"), true);
+  assert.equal(await podKeyOk("pod-tts-1", ""), false);
+  assert.equal(await podKeyOk("pod-tts-1", "evtok_other"), false);
+  assert.equal(await podKeyOk("pod-tts-1", "shared-test-key-2"), false);   // shared key no longer works once the pod has its token
+  assert.equal(await podKeyOk("pod-unknown", "evtok_known"), false);
+});

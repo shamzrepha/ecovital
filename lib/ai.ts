@@ -181,7 +181,7 @@ export function fallbackLine(ctx: AiContext): string {
   return clean(`${cap} ${verb} ${val}, which is ${word}. ${act}`);
 }
 
-async function geminiText(prompt: string, systemPrompt = SYSTEM, maxTokens = 320): Promise<string> {
+export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxTokens = 320): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
   // Gemini 3.1 Flash-Lite first; the others only run if it is unavailable.
@@ -293,6 +293,8 @@ export interface AskInput {
   hourlyBuckets: { timeRange: string; dust: number | null; air: number | null; temp: number | null; hum: number | null }[];
   recentEvents: { time: string; kind: string; metric: string | null; text: string }[];
   forecasts: Partial<Record<MetricKey, { predicted: number; horizonMin: number; confidence: string; trend: string }>>;
+  /** The room forecast (estimates), including outside weather and red flags. */
+  prediction?: any;
 }
 
 export interface AskOutput {
@@ -315,7 +317,8 @@ Rules for every answer:
 5. Dust and air freshness are simple 0 to 100 scores from low-cost sensors. Never give them units like µg/m³ or ppm, never name CO₂ or PM2.5, and never say anything is dangerous to health or diagnose anyone. Say "may help" or "consider".
 6. Say whether a number was measured right now or is an estimate of what comes next, and give the time window for past readings.
 7. The pod cannot switch fans or windows on by itself. Advice such as "open a window" is for the person to do.
-8. Keep it short: 3 to 5 sentences, no lists, no markdown, no emojis. You may end with one short follow-up question.`;
+8. The JSON may include "prediction": the pod's forecast for the next hour (estimates), the outside weather, and red flags. Use it for questions about what will happen, why a reading is moving, or whether the weather matters. Always call forecast numbers estimates ("it looks like", "may"), give the time (for example "in about 30 minutes"), and explain a red flag simply. If "outsideWeather" says it is not available, say the outside weather is not known because the pod has no location set, and tell them they can set it on the pod's page.
+9. Keep it short: 3 to 5 sentences, no lists, no markdown, no emojis. You may end with one short follow-up question.`;
 
 function describeReadingPlainly(latest: Partial<Record<MetricKey, number | null>>): string {
   const bits: string[] = [];
@@ -445,6 +448,18 @@ export async function answerPodQuestion(
     } else if (worstAir.air !== null && highestDust.dust !== null) {
       parts.push(`Over the ${input.windowLabel}, the room was stuffiest around ${worstAir.timeRange} (${worstAir.air.toFixed(0)}% air freshness) and dustiest around ${highestDust.timeRange} (${highestDust.dust.toFixed(0)}% dust).`);
     }
+  }
+
+  if (input.prediction && !input.prediction.stale && /\b(forecast|predict|next|later|soon|will|going to|expect|trend|weather|rain|outside|why)\b/i.test(qLower)) {
+    parts.push(`${input.prediction.headline} (estimate).`);
+    const flag = input.prediction.redFlags?.[0];
+    if (flag) parts.push(`${flag.title}. ${flag.explanation}`);
+    else if (input.prediction.outsideWeather && typeof input.prediction.outsideWeather === "object") {
+      const w = input.prediction.outsideWeather;
+      parts.push(`Outside it is ${w.temperatureC}°C and ${w.sky}.`);
+    }
+    if (input.prediction.suggestion && input.prediction.suggestion !== "No action needed right now.") parts.push(input.prediction.suggestion);
+    citations.push("room forecast (estimate)");
   }
 
   const fKeys = METRIC_KEYS.filter((k) => input.forecasts[k]);

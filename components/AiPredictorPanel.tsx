@@ -1,279 +1,167 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { METRIC_KEYS, type MetricKey } from "@/lib/config";
+import { METRIC_KEYS, statusRank, type MetricKey } from "@/lib/config";
 
 interface Props {
   podId: string;
   onSpeak?: (eventId: number, text: string) => void;
 }
 
+const tone = (status: string) => (statusRank(status as any) === 0 ? "good" : statusRank(status as any) === 1 ? "watch" : "bad");
+const arrow = (perHour: number, step: number) => (Math.abs(perHour) < step * 0.6 ? "→" : perHour > 0 ? "↗" : "↘");
+const STEP: Record<MetricKey, number> = { dust: 3, air: 3, temp: 0.5, hum: 2 };
+
 export default function AiPredictorPanel({ podId, onSpeak }: Props) {
-  const [pred, setPred] = useState<any>(null);
-  const [selectedWhatIf, setSelectedWhatIf] = useState<string>("open_window");
+  const [r, setR] = useState<any>(null);
+  const [failed, setFailed] = useState(false);
   const [speaking, setSpeaking] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [locMsg, setLocMsg] = useState("");
 
   const load = useCallback(async () => {
     if (!podId) return;
     try {
       const res = await fetch(`/api/predict/${encodeURIComponent(podId)}`, { cache: "no-store" });
-      if (res.ok) {
-        const j = await res.json();
-        setPred(j);
-      }
-    } finally {
-      setLoading(false);
+      if (!res.ok) { setFailed(true); return; }
+      setR(await res.json());
+      setFailed(false);
+    } catch {
+      setFailed(true);
     }
   }, [podId]);
 
   useEffect(() => {
-    setLoading(true);
+    setR(null);
     load();
-    const t = setInterval(() => {
-      if (document.visibilityState === "visible") load();
-    }, 10000);
+    const t = setInterval(() => { if (document.visibilityState === "visible") load(); }, 20000);
     return () => clearInterval(t);
   }, [load]);
 
-  async function speakPredictionOutLoud() {
-    if (!podId || speaking) return;
+  async function speakOutLoud() {
+    if (speaking) return;
     setSpeaking(true);
     try {
       const res = await fetch(`/api/predict/${encodeURIComponent(podId)}`, { method: "POST" });
       const j = await res.json();
-      setPred(j);
-      if (onSpeak && j.eventId && j.spokenForecast) {
-        onSpeak(j.eventId, j.spokenForecast);
-      } else if (typeof window !== "undefined" && "speechSynthesis" in window && j.spokenForecast) {
+      if (!res.ok) return;
+      setR(j);
+      if (onSpeak && j.eventId && j.spokenForecast) onSpeak(j.eventId, j.spokenForecast);
+      else if ("speechSynthesis" in window && j.spokenForecast) {
         window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(j.spokenForecast);
-        window.speechSynthesis.speak(u);
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(j.spokenForecast));
       }
     } finally {
       setSpeaking(false);
     }
   }
 
-  if (loading && !pred) {
-    return (
-      <section className="card" aria-label="AI Predictive Engine">
-        <h2>🔮 AI Predictive Engine (+10m / +30m / +60m)</h2>
-        <p className="note">Calculating multi-horizon sensor trends and What-If scenarios...</p>
-      </section>
+  function useMyLocation() {
+    if (!navigator.geolocation) { setLocMsg("This browser cannot share a location. Try your phone."); return; }
+    setLocMsg("Asking for your location…");
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const res = await fetch(`/api/pods/${encodeURIComponent(podId)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ lat: +pos.coords.latitude.toFixed(3), lng: +pos.coords.longitude.toFixed(3) }),
+        });
+        setLocMsg(res.ok ? "Location saved. Loading the outside weather…" : "Could not save the location.");
+        if (res.ok) load();
+      },
+      () => setLocMsg("Location was not shared. Allow location access and try again."),
+      { enableHighAccuracy: false, timeout: 10000 },
     );
   }
 
-  if (!pred) return null;
+  if (failed && !r) return null;
+  if (!r) return <section className="card fc" aria-label="Forecast"><div className="skeleton">Working out what happens next…</div></section>;
 
-  const activeWhatIf =
-    (pred.whatIfs || []).find((w: any) => w.id === selectedWhatIf) || (pred.whatIfs || [])[0];
-
-  const riskBadgeClass =
-    pred.riskLevel === "high" ? "bad" : pred.riskLevel === "medium" ? "" : "good";
-
+  const risk = r.riskLevel as "low" | "medium" | "high";
   return (
-    <section
-      className="card"
-      aria-label="AI Predictive Engine and What-If Simulator"
-      style={{
-        borderLeft: `5px solid ${
-          pred.riskLevel === "high"
-            ? "var(--bad)"
-            : pred.riskLevel === "medium"
-              ? "var(--watch)"
-              : "var(--fc)"
-        }`,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 10,
-          marginBottom: 8,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>
-            🔮 AI Predictive Engine — What Will Happen Next in {pred.podName}
-          </h2>
-          <span className="tag-estimated">
-            Estimated · {pred.aiSource === "gemini" ? "Gemini Predictive AI" : "Linear Trend + Diurnal Rhythm"}
-          </span>
-          <span className={`chip ${riskBadgeClass}`}>
-            {pred.riskLevel === "high"
-              ? "⚠️ High Early-Warning Risk"
-              : pred.riskLevel === "medium"
-                ? "⚡ Watch Trend"
-                : "✓ Steady Trajectory"}
-          </span>
-        </div>
-
-        <button
-          type="button"
-          className="btn primary small"
-          disabled={speaking}
-          onClick={speakPredictionOutLoud}
-        >
-          {speaking ? "Speaking..." : "🔊 Speak AI Prediction Out Loud"}
-        </button>
+    <section className={`card fc fc-${risk}`} aria-label="Forecast for the next hour">
+      <div className="fc-head">
+        <h2>What is likely to happen next</h2>
+        <span className="tag-estimated" title="Forecasts are estimates, not measurements">Estimate</span>
       </div>
 
-      {/* Main AI Narrative & Recommended Preventive Action */}
-      <div
-        style={{
-          background: "var(--panel-alt)",
-          border: "1px solid var(--rule)",
-          borderRadius: 10,
-          padding: "12px 14px",
-          marginBottom: 14,
-        }}
-      >
-        <div style={{ fontSize: 15.5, fontWeight: 550, lineHeight: 1.45, marginBottom: 6 }}>
-          {pred.aiNarrative || pred.headline}
-        </div>
-        <div style={{ fontSize: 13.5, color: "var(--brand-deep)", fontWeight: 600 }}>
-          💡 Preventive Action Before Threshold Crosses: {pred.preventiveAction}
-        </div>
-      </div>
+      <p className="fc-headline">{r.headline}</p>
+      <p className="fc-story">{r.aiNarrative}</p>
+      <p className="note fc-how">{r.learning.note}</p>
 
-      {/* Multi-Horizon Trajectory (+10m, +30m, +60m) */}
-      <div className="grid-2" style={{ alignItems: "start" }}>
-        <div>
-          <h3 style={{ fontSize: 14, marginBottom: 6 }}>
-            Multi-Horizon Sensor &amp; Room Score Forecast
-          </h3>
-          <div className="table-wrap">
-            <table className="kv">
-              <thead>
-                <tr>
-                  <th>Metric</th>
-                  <td>Now (Measured)</td>
-                  <td>+10 min</td>
-                  <td>+30 min</td>
-                  <td>+60 min</td>
-                  <td>Trend</td>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <th>Room Score</th>
-                  <td>
-                    <b>{pred.horizons?.[0]?.roomScore ?? "--"}/100</b>
-                  </td>
-                  <td>
-                    <b>{pred.horizons?.[0]?.roomScore ?? "--"}</b> ({pred.horizons?.[0]?.scoreWord})
-                  </td>
-                  <td>
-                    <b>{pred.horizons?.[1]?.roomScore ?? "--"}</b> ({pred.horizons?.[1]?.scoreWord})
-                  </td>
-                  <td>
-                    <b>{pred.horizons?.[2]?.roomScore ?? "--"}</b> ({pred.horizons?.[2]?.scoreWord})
-                  </td>
-                  <td>
-                    <span className="tag-estimated">Estimated</span>
-                  </td>
-                </tr>
-                {METRIC_KEYS.map((k: MetricKey) => {
-                  const m = pred.metrics?.[k];
-                  if (!m) return null;
-                  return (
-                    <tr key={k}>
-                      <th>{m.label}</th>
-                      <td>
-                        {m.current}
-                        {m.unit}
-                      </td>
-                      <td>
-                        <b>
-                          {m.pred10m}
-                          {m.unit}
-                        </b>
-                      </td>
-                      <td>
-                        {m.pred30m}
-                        {m.unit}
-                      </td>
-                      <td>
-                        {m.pred60m}
-                        {m.unit}
-                      </td>
-                      <td>
-                        {m.crossing ? (
-                          <span className="chip bad">
-                            Crosses {m.crossing.threshold}
-                            {m.unit} in ~{m.crossing.inMinutes}m
-                          </span>
-                        ) : (
-                          <span className="note">
-                            {m.trend} ({m.slopePerMin >= 0 ? "+" : ""}
-                            {m.slopePerMin}/m)
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Interactive "What-If" Intervention Simulator */}
-        <div>
-          <h3 style={{ fontSize: 14, marginBottom: 6 }}>
-            Interactive &ldquo;What-If&rdquo; Action Predictor (Simulate Intervention)
-          </h3>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
-            {(pred.whatIfs || []).map((w: any) => (
-              <button
-                key={w.id}
-                type="button"
-                className="btn small"
-                aria-pressed={selectedWhatIf === w.id}
-                onClick={() => setSelectedWhatIf(w.id)}
-              >
-                {w.label}
-              </button>
-            ))}
-          </div>
-
-          {activeWhatIf && (
-            <div className="sensor-tile">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
-                <b>{activeWhatIf.label}</b>
-                <span className="tag-estimated">Simulated outcome</span>
+      {!r.stale && (
+        <div className="fc-grid">
+          {METRIC_KEYS.map((k) => {
+            const m = r.metrics[k];
+            const p30 = m.predictions.find((p: any) => p.horizon === 30);
+            const p60 = m.predictions.find((p: any) => p.horizon === 60);
+            return (
+              <div key={k} className="fc-metric">
+                <div className="fc-m-top">
+                  <b>{m.label}</b>
+                  <span className="note">{arrow(m.perHour, STEP[k])} {m.trendWord}</span>
+                </div>
+                <div className="fc-now">Now <b>{m.current ?? "--"}</b><small>{m.unit}</small> <span className="tag-measured">Measured</span></div>
+                {[["In 30 minutes", p30], ["In 1 hour", p60]].map(([label, p]: any) => (
+                  <div key={label} className="fc-row">
+                    <span>{label}</span>
+                    {p ? (
+                      <span className={`fc-val ${tone(p.status)}`}>
+                        <span className={`dot ${tone(p.status)}`} /> <b>{p.value}</b><small>{m.unit}</small>
+                        <span className="fc-range">({p.low}–{p.high})</span> <em>{p.statusWord}</em>
+                      </span>
+                    ) : <span className="note">not enough data</span>}
+                  </div>
+                ))}
+                {m.reaches && <div className={`fc-reach ${m.reaches.level}`}>May become {m.reaches.word.toLowerCase()} in about {m.reaches.minutes} min</div>}
               </div>
-              <p className="note" style={{ margin: "4px 0 8px" }}>
-                {activeWhatIf.description}
-              </p>
-              <div className="whatif-grid">
-                <div>
-                  <div className="note">Score (30m)</div>
-                  <b style={{ fontSize: 17, color: "var(--brand-leaf)" }}>{activeWhatIf.in30m.roomScore}/100</b>
-                </div>
-                <div>
-                  <div className="note">Dust</div>
-                  <b>{activeWhatIf.in30m.dust}%</b>
-                </div>
-                <div>
-                  <div className="note">Air</div>
-                  <b>{activeWhatIf.in30m.air}%</b>
-                </div>
-                <div>
-                  <div className="note">Temp</div>
-                  <b>{activeWhatIf.in30m.temp}°C</b>
-                </div>
-                <div>
-                  <div className="note">Hum</div>
-                  <b>{activeWhatIf.in30m.hum}%</b>
-                </div>
-              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {r.roomScore?.now != null && r.roomScore.in60 != null && (
+        <p className="note">Room score: <b>{r.roomScore.now}</b> now{r.roomScore.in30 != null && <> → <b>{r.roomScore.in30}</b> in 30 minutes</>} → <b>{r.roomScore.in60}</b> in 1 hour (estimate).</p>
+      )}
+
+      {r.flags.length > 0 && (
+        <div className="fc-flags">
+          {r.flags.map((f: any) => (
+            <div key={f.id} className={`fc-flag ${f.level}`}>
+              <b>{f.level === "flag" ? "⚠ Red flag: " : f.level === "watch" ? "Keep an eye on this: " : ""}{f.title}</b>
+              <p>{f.text}</p>
+              <ul>{f.evidence.map((e: string) => <li key={e}>{e}</li>)}</ul>
             </div>
-          )}
+          ))}
         </div>
+      )}
+
+      <div className="fc-outside">
+        {r.outside ? (
+          <>
+            <b>Outside right now</b> <span className="tag-estimated">Outside data</span>
+            <p>
+              {r.outside.temp}°C, {r.outside.hum}% humidity, {r.outside.sky}. In 3 hours: about {r.outside.in3h.temp}°C, rain chance {r.outside.in3h.rainChance}%.
+              <span className="note"> Weather from {r.outside.source}.</span>
+            </p>
+          </>
+        ) : (
+          <>
+            <b>Add the pod's location for weather-aware forecasts</b>
+            <p className="note" style={{ margin: "4px 0 8px" }}>
+              With a location, EcoVital can see rain and outside temperature coming and tell you when the room is behaving oddly for the weather.
+            </p>
+          </>
+        )}
+        <button type="button" className="btn small" onClick={useMyLocation}>
+          📍 {r.outside ? "Update location" : "Use my location"}
+        </button>
+        {locMsg && <span className="note" role="status" style={{ marginLeft: 8 }}>{locMsg}</span>}
+      </div>
+
+      <div className="fc-actions">
+        <button type="button" className="btn small primary" onClick={speakOutLoud} disabled={speaking || r.stale}>
+          {speaking ? "Preparing…" : "🔊 Say this out loud"}
+        </button>
+        <span className="note">{r.aiSource === "gemini" ? "Explained by Gemini from the numbers above." : "Explained from the numbers above."}</span>
       </div>
     </section>
   );

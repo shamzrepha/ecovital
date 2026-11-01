@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "1.8"
+#define FW_VERSION "1.9"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -676,6 +676,7 @@ bool playSpeech(int eventId) {
   if (https) { sec.setInsecure(); http.begin(sec, url); }   // see README: add the Vercel root CA to verify the server
   else http.begin(plain, url);
   http.useHTTP10(true);                // plain Content-Length body, no chunked encoding
+  http.addHeader("X-Device-Key", cfgTok.length() ? cfgTok.c_str() : DEVICE_KEY);   // the speech is private to this pod's owner
   http.setTimeout(20000);
   int code = http.GET();
   if (code != 200) {

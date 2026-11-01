@@ -24,6 +24,10 @@ EcoVital pods (ESP32, dust + gas + temperature/humidity sensors, speaker) upload
 3. `POST /api/claim` links the pod to the signed-in account and issues a private device token. The pod receives it on its next upload and stops using the shared key.
 4. Wrong codes that no pod has ever announced count as failed claims: 5 in a row locks claiming for 10 minutes.
 
+## Forecasts
+
+`lib/forecast-ml.ts` trains a small ridge regression per reading and per horizon (+10, +30, +60 min) on the pod's last 7 days. Inputs are the rate of change over 5, 15 and 60 minutes, distance from the usual level, time of day, and (when the pod has a location) outside temperature, its expected change, humidity and rain chance from Open-Meteo. The model is used only if it beats "no change" and a damped-trend guess on held-out data; otherwise the better guess is used and labelled. Red flags (for example a room warming while it cools outside) are rule-based. The Ask assistant receives the same forecast. Everything forecast is labelled Estimate. A pod needs a location (set on the dashboard) to get weather.
+
 ## Honesty rules
 
 - Dust and air are **relative indexes (0–100)**, never shown as µg/m³ or ppm.

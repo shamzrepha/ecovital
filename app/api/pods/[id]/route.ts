@@ -18,6 +18,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       scoreWeights: body.scoreWeights,
       customThresholds: body.customThresholds,
       resetThresholds: Boolean(body.resetThresholds),
+      lat: body.lat === null ? null : body.lat !== undefined ? Number(body.lat) : undefined,
+      lng: body.lng === null ? null : body.lng !== undefined ? Number(body.lng) : undefined,
     });
     return NextResponse.json(res);
   } catch (e) {

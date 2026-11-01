@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { synthesize, makeWav } from "@/lib/ai";
+import { podKeyOk } from "@/lib/pods";
+import { requirePodOwner } from "@/lib/session";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -17,8 +19,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
   try {
     const sql = await db();
-    const rows = await sql`SELECT spoken, audio_b64 FROM events WHERE id = ${eventId}`;
+    const rows = await sql`SELECT device_id, spoken, audio_b64 FROM events WHERE id = ${eventId}`;
     if (!rows.length || !rows[0].spoken) return NextResponse.json({ error: "No spoken line for this event" }, { status: 404 });
+
+    // Only the pod that spoke (with its own key) or the signed-in owner of that pod may hear this audio.
+    const deviceId = rows[0].device_id as string;
+    let allowed = await podKeyOk(deviceId, req.headers.get("x-device-key") ?? "");
+    if (!allowed) {
+      try { await requirePodOwner(req, deviceId); allowed = true; } catch { /* not the owner */ }
+    }
+    if (!allowed) return NextResponse.json({ error: "Not allowed" }, { status: 404 });
 
     let pcm: Buffer;
     if (rows[0].audio_b64) {
@@ -33,7 +43,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         "content-type": wav ? "audio/wav" : "application/octet-stream",
         "content-length": String(out.length),
         "x-sample-rate": "24000",
-        "cache-control": "public, max-age=31536000, immutable",
+        "cache-control": "private, max-age=3600",
       },
     });
   } catch (e: any) {

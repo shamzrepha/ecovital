@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db, iso } from "@/lib/db";
 import { answerPodQuestion } from "@/lib/ai";
 import { errorResponse, requirePodOwner } from "@/lib/session";
+import { forecastForAsk, generateAiPredictions } from "@/lib/ai-predict";
 
 export const runtime = "nodejs";
 
@@ -102,6 +103,7 @@ export async function POST(req: NextRequest) {
         text: e.text,
       })),
       forecasts: {},
+      prediction: await generateAiPredictions(podId).then(forecastForAsk).catch(() => undefined),
     });
 
     const citationChips = ans.citations.map((c) => ({ label: "Grounded source", detail: c }));
