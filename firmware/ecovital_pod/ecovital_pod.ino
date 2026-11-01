@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "1.7"
+#define FW_VERSION "1.8"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -463,18 +463,25 @@ void updateHeader(unsigned long now) {
   tft.drawRGBBitmap(0, 0, headerCanvas.getBuffer(), 160, 15);
 }
 
-void drawFooter() {                                 // bottom line: IP address, or "Disconnected", and readings saved for later
+extern bool apActive;
+String lastIpStr = "";
+void drawFooter() {                                 // bottom line: device ID when online, an IP address when not, and readings saved for later
   bool on = WiFi.status() == WL_CONNECTED;
-  String key = on ? WiFi.localIP().toString() : String("-");
+  if (on) lastIpStr = WiFi.localIP().toString();
+  String shown;
+  if (on) shown = String(deviceId);                                              // sealed pods cannot press BOOT, so the ID is always visible
+  else if (apActive) shown = WiFi.softAPIP().toString();                         // setup mode: the address to open on your phone
+  else if (lastIpStr.length()) shown = lastIpStr;                                // reconnecting: the last address it had
+  else shown = "Disconnected";
   int saved = (netState != 2) ? ringCount() : 0;
-  key += "|"; key += saved;
+  String key = shown + (on ? "|1|" : "|0|") + String(saved);
   if (key == lastFooter) return;
   lastFooter = key;
   tft.fillRect(0, 118, 160, 10, COL_BG);
   tft.setTextSize(1);
   tft.setCursor(5, 120);
-  if (on) { tft.setTextColor(COL_SUBTEXT); tft.print("IP "); tft.print(WiFi.localIP().toString()); }
-  else    { tft.setTextColor(COL_CORAL);   tft.print("Disconnected"); }
+  tft.setTextColor(on ? COL_SUBTEXT : COL_CORAL);
+  tft.print(shown);
   if (saved > 0) {
     char b[16];
     snprintf(b, sizeof(b), "saved %d", saved);

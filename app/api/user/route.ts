@@ -21,7 +21,7 @@ export async function GET(req: NextRequest) {
         id: u.id,
         email: u.email,
         name: u.name,
-        role: u.role,
+        role: me.role,
         language: prefs.language || "en-NG",
         voice: prefs.voice || "Kore",
         voiceSpeed: prefs.voiceSpeed || "normal",

@@ -77,17 +77,23 @@ export async function getSessionUser(req: Request): Promise<SessionUser | null> 
   const id = userIdFromRequest(req);
   if (!id) return null;
   const sql = await db();
-  const rows = await sql`SELECT id, email, name, role FROM users WHERE id = ${id}`;
-  return rows.length ? (rows[0] as SessionUser) : null;
+  const rows = await sql`SELECT id, email, name FROM users WHERE id = ${id}`;
+  return rows.length ? ({ id: rows[0].id, email: rows[0].email, name: rows[0].name, role: roleFor(rows[0].email as string) } as SessionUser) : null;
 }
 
 export class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  code?: string;
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
+
+/** The one owner account. Only this email can be admin; the role is never read from the database. */
+export const rootEmail = () => (process.env.ROOT_ADMIN_EMAIL || "shamzypre14@gmail.com").trim().toLowerCase();
+export const roleFor = (email: string) => (email.trim().toLowerCase() === rootEmail() ? "admin" : "user");
 
 export async function requireUser(req: Request): Promise<SessionUser> {
   const u = await getSessionUser(req);
@@ -107,14 +113,22 @@ export async function requirePodOwner(req: Request, podId: string): Promise<Sess
 }
 
 export function errorResponse(e: unknown): Response {
-  if (e instanceof HttpError) return Response.json({ ok: false, error: e.message }, { status: e.status });
+  if (e instanceof HttpError) return Response.json({ ok: false, error: e.message, code: e.code }, { status: e.status });
   return Response.json({ ok: false, error: String((e as any)?.message ?? e).slice(0, 300) }, { status: 500 });
 }
 
-export async function createAccount(email: string, name: string, password: string): Promise<SessionUser> {
+export async function createAccount(email: string, name: string, password: string, setupCode = ""): Promise<SessionUser> {
   const clean = email.trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(clean)) throw new HttpError(400, "Enter a valid email address.");
   if (password.length < 8) throw new HttpError(400, "Password must be at least 8 characters.");
+  if (roleFor(clean) === "admin") {
+    // Anyone could type the owner's email, so the owner account needs a secret code that only the owner has (set on the server).
+    const want = process.env.ADMIN_SETUP_CODE || "";
+    const a = Buffer.from(setupCode), b = Buffer.from(want);
+    if (!want || a.length !== b.length || !timingSafeEqual(a, b)) {
+      throw new HttpError(403, want ? "This email is reserved for the EcoVital owner. Enter the owner setup code." : "This email is reserved for the EcoVital owner, and the owner setup code is not configured on the server yet.", "setup-code");
+    }
+  }
   const sql = await db();
   const taken = await sql`SELECT id, password_hash FROM users WHERE email = ${clean}`;
   if (taken.length && taken[0].password_hash) throw new HttpError(409, "An account with this email already exists. Sign in instead.");
@@ -124,20 +138,9 @@ export async function createAccount(email: string, name: string, password: strin
   if (taken.length) {
     await sql`UPDATE users SET name = ${display}, password_hash = ${hash} WHERE id = ${id}`;
   } else {
-    const role = await firstUserRole(sql);
-    await sql`INSERT INTO users (id, email, name, role, password_hash) VALUES (${id}, ${clean}, ${display}, ${role}, ${hash})`;
+    await sql`INSERT INTO users (id, email, name, role, password_hash) VALUES (${id}, ${clean}, ${display}, ${roleFor(clean)}, ${hash})`;
   }
-  return { id, email: clean, name: display, role: taken.length ? "user" : await roleOf(id) };
-}
-
-async function firstUserRole(sql: Awaited<ReturnType<typeof db>>) {
-  const n = await sql`SELECT count(*) AS n FROM users WHERE password_hash IS NOT NULL`;
-  return Number(n[0]?.n ?? 0) === 0 ? "admin" : "user";
-}
-async function roleOf(id: string) {
-  const sql = await db();
-  const r = await sql`SELECT role FROM users WHERE id = ${id}`;
-  return (r[0]?.role as string) ?? "user";
+  return { id, email: clean, name: display, role: roleFor(clean) };
 }
 
 export async function loginAccount(email: string, password: string): Promise<SessionUser> {
@@ -147,6 +150,6 @@ export async function loginAccount(email: string, password: string): Promise<Ses
   if (!rows.length || !verifyPassword(password, rows[0].password_hash)) {
     throw new HttpError(401, "Email or password is not right.");
   }
-  const { id, name, role } = rows[0];
-  return { id, email: rows[0].email, name, role };
+  const { id, name } = rows[0];
+  return { id, email: rows[0].email, name, role: roleFor(rows[0].email as string) };
 }

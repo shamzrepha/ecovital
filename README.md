@@ -9,7 +9,7 @@ EcoVital pods (ESP32, dust + gas + temperature/humidity sensors, speaker) upload
 | Route | Who | What |
 |---|---|---|
 | `/` | public | Business page and "Get pods" request form (saved in the `leads` table) |
-| `/signup`, `/login` | public | Email and password accounts. **The first account created becomes the admin.** |
+| `/signup`, `/login` | public | Email and password accounts. Only the owner email (`ROOT_ADMIN_EMAIL`) can be admin, and creating that account needs `ADMIN_SETUP_CODE`. |
 | `/dashboard` | signed in | Your rooms: score, four live readings, last spoken advice, early warnings |
 | `/add` | signed in | Add a pod: power on, enter the 6-character code, name it. It waits and checks automatically |
 | `/node/[id]` | owner | Live charts, voice replay, thresholds, volume/mute, firmware, share link, remove pod |
@@ -45,7 +45,8 @@ With no `DATABASE_URL` (or `LOCAL_PGLITE=1`) it uses an in-process database that
 | `DATABASE_URL` | Neon Postgres |
 | `DEVICE_KEY` | Shared key pods use until they are paired. Must match the key inside the pod firmware |
 | `SESSION_SECRET` | Signs sign-in cookies. Set a long random value in production |
-| `ADMIN_KEY` | Optional separate key for publishing firmware (defaults to `DEVICE_KEY`) |
+| `ROOT_ADMIN_EMAIL` | The one owner account (admin: publish firmware, see all users) |
+| `ADMIN_SETUP_CODE` | Secret needed once to create the owner account |
 | `GEMINI_API_KEY` | Optional. Without it the app speaks template advice |
 | `NEXT_PUBLIC_DEMO` | Leave unset. `1` enables the `/api/demo` simulator for development only |
 

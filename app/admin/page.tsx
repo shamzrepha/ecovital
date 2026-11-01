@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
-export default function AdminPage() {
+function AdminConsole() {
   const [otaState, setOtaState] = useState<any>({ releases: [], targets: [] });
   const [nodes, setNodes] = useState<any[]>([]);
   const [version, setVersion] = useState("1.4");
@@ -308,4 +308,72 @@ export default function AdminPage() {
       </section>
     </div>
   );
+}
+
+function fmtDate(ms: number) {
+  return new Date(ms).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function UsersPanel() {
+  const [data, setData] = useState<any>(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    fetch("/api/admin/users", { cache: "no-store" })
+      .then(async (r) => { const j = await r.json(); if (!r.ok) throw new Error(j.error || "Could not load users."); setData(j); })
+      .catch((e) => setErr(e.message));
+  }, []);
+  return (
+    <div className="wrap" style={{ paddingTop: 0 }}>
+      <section className="card">
+        <h2>All users {data ? `(${data.users.length})` : ""}</h2>
+        {err && <div className="banner">{err}</div>}
+        {data && (
+          <div style={{ overflowX: "auto" }}>
+            <table className="nodes">
+              <thead><tr><th>Name</th><th>Email</th><th className="n">Pods</th><th>Joined</th></tr></thead>
+              <tbody>
+                {data.users.map((u: any) => (
+                  <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td className="n">{u.pods}</td><td>{fmtDate(u.createdAt)}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      {data && (
+        <section className="card" style={{ marginTop: 16 }}>
+          <h2>Pod requests from the business page ({data.leads.length})</h2>
+          {data.leads.length === 0 && <p className="note">No requests yet.</p>}
+          {data.leads.length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table className="nodes">
+                <thead><tr><th>Name</th><th>Email</th><th>Organisation</th><th className="n">Pods</th><th>Message</th><th>Sent</th></tr></thead>
+                <tbody>
+                  {data.leads.map((l: any) => (
+                    <tr key={l.id}><td>{l.name}</td><td>{l.email}</td><td>{l.organisation ?? ""}</td><td className="n">{l.pods ?? ""}</td><td>{l.message ?? ""}</td><td>{fmtDate(l.createdAt)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+    </div>
+  );
+}
+
+export default function AdminPage() {
+  const [me, setMe] = useState<any>(undefined);
+  useEffect(() => {
+    fetch("/api/auth/me", { cache: "no-store" }).then((r) => r.json()).then((j) => setMe(j.user ?? null)).catch(() => setMe(null));
+  }, []);
+  if (me === undefined) return <div className="wrap"><div className="skeleton">Loading…</div></div>;
+  if (!me || me.role !== "admin") {
+    return (
+      <div className="wrap">
+        <div className="empty"><h2 style={{ marginTop: 0 }}>Owner access only</h2><p>This area is only for the EcoVital owner account.</p><Link className="btn" href="/dashboard">Back to home</Link></div>
+      </div>
+    );
+  }
+  return (<><AdminConsole /><UsersPanel /></>);
 }
