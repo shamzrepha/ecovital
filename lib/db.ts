@@ -168,14 +168,13 @@ let ready: Promise<Sql> | null = null;
 
 async function open(): Promise<Sql> {
   let sql: Sql;
-  if (process.env.LOCAL_PGLITE === "1") {
-    // Local testing only: an in-process Postgres, no account needed. Not used on Vercel.
+  const url = process.env.DATABASE_URL;
+  if (process.env.LOCAL_PGLITE === "1" || !url) {
+    // Zero-config fallback when DATABASE_URL is not set (or in local testing).
     const shim = pathToFileURL(join(process.cwd(), "lib", "pglite-shim.mjs")).href;
     const m: any = await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ shim);
     sql = m.makeSql();
   } else {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL is not set. Add a Neon Postgres database in Vercel > Storage.");
     sql = neon(url) as unknown as Sql;
   }
   for (const stmt of SCHEMA) {

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "env": {
+    "NEXT_PUBLIC_DEMO": "1",
+    "FIREBASE_DATABASE_URL": "https://saryx-robot-shamz-default-rtdb.europe-west1.firebasedatabase.app",
+    "NEXT_PUBLIC_FIREBASE_DATABASE_URL": "https://saryx-robot-shamz-default-rtdb.europe-west1.firebasedatabase.app"
+  }
+}
