@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { ago } from "./useVoice";
 import AiPredictorPanel from "./AiPredictorPanel";
+import SosButton from "./SosButton";
 import { METRIC_KEYS, METRICS, ROOM_PROFILES, fmt, statusRank, statusWord, type MetricKey, type RoomProfileKey } from "@/lib/config";
 
 function worst(status: Record<string, string>): "good" | "watch" | "bad" {
@@ -169,6 +170,7 @@ export default function NetworkView() {
               <Link className="btn small" href={`/insights?pod=${encodeURIComponent(active.id)}`}>Insights</Link>
               <Link className="btn small" href={`/ask?pod=${encodeURIComponent(active.id)}`}>Ask EcoVital</Link>
               <a className="btn small" href={`/api/export/${encodeURIComponent(active.id)}?range=24h`} download>Export 24 h CSV</a>
+              <SosButton podId={active.id} podName={active.name} />
             </div>
           </div>
         </section>

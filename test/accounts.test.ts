@@ -81,3 +81,24 @@ test("wrong-code guessing still locks claiming after 5 tries", async () => {
   assert.equal((await claimPodByCode({ code: "ZZZZ95", userId: cy.id })).locked, true);
   assert.equal((await claimPodByCode({ code: "ZZZZ96", userId: cy.id })).locked, true);
 });
+
+test("app settings and SOS reach the pod in the ingest reply, SOS only once", async () => {
+  const dee = await createAccount("dee@example.com", "Dee", "longenough1");
+  const sample = [{ ageMs: 0, dust: 10, air: 90, temp: 26, hum: 48 }];
+  await ingest({ id: "pod-sos-1", name: "Pod", meta: { fw: "1.6", claim: "SOSX26" } }, sample);
+  assert.equal((await claimPodByCode({ code: "SOSX26", userId: dee.id, nickname: 'Room "7"' })).ok, true);
+
+  const first = await ingest({ id: "pod-sos-1", name: "Pod", meta: { fw: "1.6", claim: "SOSX26" } }, sample);
+  assert.equal(first.name, "Room 7");                       // quotes are stripped so the pod can parse it
+  assert.equal(first.lim?.length, 16);
+  assert.equal(first.sos, undefined);
+
+  const { db } = await import("../lib/db.ts");
+  const sql = await db();
+  await sql`UPDATE pods SET sos_at = now() WHERE device_id = 'pod-sos-1'`;
+  assert.equal((await ingest({ id: "pod-sos-1", name: "Pod", meta: {} }, sample)).sos, true);
+  assert.equal((await ingest({ id: "pod-sos-1", name: "Pod", meta: {} }, sample)).sos, undefined);
+
+  await sql`UPDATE pods SET sos_at = now() - interval '5 minutes' WHERE device_id = 'pod-sos-1'`;
+  assert.equal((await ingest({ id: "pod-sos-1", name: "Pod", meta: {} }, sample)).sos, undefined);   // stale SOS is dropped
+});

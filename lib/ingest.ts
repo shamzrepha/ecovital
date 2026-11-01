@@ -33,6 +33,9 @@ export interface IngestResult {
   otaVersion?: string;
   otaUrl?: string;
   deviceToken?: string;
+  name?: string;
+  lim?: (number | null)[];
+  sos?: boolean;
 }
 
 const FRESH_MS = 90_000;
@@ -88,7 +91,7 @@ export async function ingest(
   await sql`INSERT INTO pods (device_id, nickname) VALUES (${id}, ${info.name ?? id}) ON CONFLICT (device_id) DO NOTHING`;
 
   // Load pod settings, firmware target, and threshold overrides
-  const podRows = await sql`SELECT claimed_by, profile, volume, muted, nickname, device_token, token_delivered FROM pods WHERE device_id = ${id}`;
+  const podRows = await sql`SELECT claimed_by, profile, volume, muted, nickname, device_token, token_delivered, (extract(epoch from sos_at) * 1000)::float8 AS sos_ms FROM pods WHERE device_id = ${id}`;
   const podRow = podRows[0] ?? { profile: "classroom", volume: 100, muted: false };
   const profile: string = podRow.profile ?? "classroom";
 
@@ -145,11 +148,28 @@ export async function ingest(
               ON CONFLICT DO NOTHING`;
   }
 
+  // Settings and commands from the app that the pod applies on this reply
+  const podName = String(podRow.nickname ?? "").replace(/[^ -~]/g, "").replace(/["\\]/g, "").trim().slice(0, 31);
+  // pod order: dust, air, temp, hum; each as watchHigh, badHigh, watchLow, badLow (null = no such limit)
+  const lim: (number | null)[] = [];
+  for (const k of ["dust", "air", "temp", "hum"] as MetricKey[]) {
+    const c = configs[k]!;
+    lim.push(c.watchHigh ?? null, c.badHigh ?? null, c.watchLow ?? null, c.badLow ?? null);
+  }
+  let sos = false;
+  if (podRow.sos_ms) {
+    sos = now - Number(podRow.sos_ms) < 2 * 60_000;   // a stale SOS must not sound minutes later
+    await sql`UPDATE pods SET sos_at = NULL WHERE device_id = ${id}`;
+  }
+
   const result: IngestResult = {
     ok: true, accepted: usable.length, rejected: clean.length - usable.length, invalidFields,
     serverTime: now, events: [],
     volume: Number(podRow.volume ?? 100),
     mute: !!podRow.muted,
+    ...(podRow.claimed_by && podName ? { name: podName } : {}),
+    lim,
+    ...(sos ? { sos: true } : {}),
     ...(otaVersion && otaUrl ? { otaVersion, otaUrl } : {}),
     ...(deviceToken ? { deviceToken } : {}),
   };

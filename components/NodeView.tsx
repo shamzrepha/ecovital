@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import StripChart from "./StripChart";
+import SosButton from "./SosButton";
 import AiPredictorPanel from "./AiPredictorPanel";
 import { ago, useVoice } from "./useVoice";
 import {
@@ -119,7 +120,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || "Save failed");
-      setSaveMsg("Saved! Volume and mute reach the pod on its next upload; room profile and name apply in the app immediately.");
+      setSaveMsg("Saved. Name, volume, mute and limits reach the pod within about 5 seconds.");
       load();
     } catch (e: any) {
       setSaveMsg(`Error: ${e.message}`);
@@ -801,6 +802,7 @@ function Header(props: {
             : `Offline, ${props.savedCount ?? 0} readings saved on the pod will arrive when it reconnects`}
         </span>
       )}
+      {props.podId && !props.readOnly && <SosButton podId={props.podId} podName={props.name} />}
       {props.podId && !props.readOnly && (
         <Link className="btn small" href={`/ask?pod=${encodeURIComponent(props.podId)}`}>
           💬 Ask about this pod

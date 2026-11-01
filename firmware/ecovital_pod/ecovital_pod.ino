@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "1.5"
+#define FW_VERSION "1.6"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -633,19 +633,21 @@ void writePcm(const uint8_t* data, size_t len) {
   }
 }
 
-void playTone(float freq, int ms) {
+void playToneVol(float freq, int ms, float vol) {
   int n = SPEECH_RATE * ms / 1000;
   int16_t frames[256 * 2];
   int fi = 0;
   for (int i = 0; i < n; i++) {
     float env = 1.0f;
     if (i < 200) env = i / 200.0f; else if (i > n - 200) env = (n - i) / 200.0f;
-    int16_t s = (int16_t)(sinf(2 * PI * freq * i / SPEECH_RATE) * 30000 * SPEAKER_VOLUME * env);
+    int16_t s = (int16_t)(sinf(2 * PI * freq * i / SPEECH_RATE) * 30000 * vol * env);
     frames[fi++] = s; frames[fi++] = s;
     if (fi >= 256 * 2) { i2sWrite(frames, fi * 2); fi = 0; }
   }
   if (fi) i2sWrite(frames, fi * 2);
 }
+
+void playTone(float freq, int ms) { playToneVol(freq, ms, SPEAKER_VOLUME); }
 
 void beepPattern(int count) {
   if (!i2sStart()) return;
@@ -748,7 +750,7 @@ int testClip = 0;
 enum { ST_OK = 0, ST_WATCH_H = 1, ST_BAD_H = 2, ST_WATCH_L = 3, ST_BAD_L = 4 };
 struct Lim { float wH, bH, wL, bL, hyst; };
 //                       watchHigh badHigh watchLow badLow  hysteresis
-static const Lim LIM[4] = { {35,  65,  NAN, NAN, 3.0f},    // 0 dust
+static Lim LIM[4] = { {35,  65,  NAN, NAN, 3.0f},    // 0 dust
                             {NAN, NAN, 70,  45,  3.0f},    // 1 air index (low is bad)
                             {30,  36,  16,  NAN, 0.5f},    // 2 temperature
                             {68,  82,  30,  NAN, 2.0f} };  // 3 humidity
@@ -812,7 +814,8 @@ void localAlertStep(uint32_t now) {            // called once per recorded readi
     uint8_t cand = classifyLocal(m, v[m], locStatus[m]);
     if (cand == locStatus[m]) { candStatus[m] = cand; continue; }
     if (cand != candStatus[m]) { candStatus[m] = cand; candSince[m] = now; continue; }
-    if (now - candSince[m] < 10000) continue;   // must hold for 10 s before it counts
+    // must hold before it counts: 5 s (two readings) for a bad state, 10 s for a watch state
+    if (now - candSince[m] < (sevOf(cand) == 2 ? 5000u : 10000u)) continue;
     uint8_t old = locStatus[m];
     locStatus[m] = cand;
     if (sevOf(cand) > sevOf(old)) {             // got worse: say what to do
@@ -917,7 +920,8 @@ void servicePending(uint32_t now) {             // called every loop
   if (pendingClip < 0 || speaking || clipRequest >= 0) return;
   bool online = (netState == 2) && (now - lastOkMs < 40000);
   if (lastCloudSpeakMs > pendingAt) { pendingClip = -1; return; }       // the AI already spoke
-  if (!online || now - pendingAt >= 35000) {
+  uint32_t grace = pendingPrio >= 100 ? 12000 : 25000;                   // wait for the cloud voice, but not long when it is bad
+  if (!online || now - pendingAt >= grace) {
     Serial.printf("[alert] speaking offline advice (clip %d)\n", pendingClip);
     clipRequest = pendingClip;
     pendingClip = -1;
@@ -958,7 +962,21 @@ void playClip(int id) {
   i2sStop();
 }
 
-void serviceAudio() {                           // runs on the network core, the only place that touches the speaker after boot
+volatile bool sosRequest = false;
+void playSos() {                                 // loud two-tone siren, even when muted or turned down low
+  if (!i2sStart()) { Serial.println("[sos] I2S start failed"); return; }
+  speaking = true;
+  int16_t z[256 * 2] = {0};
+  i2sWrite(z, sizeof(z));
+  float vol = (spkVol < 0.6f ? 0.6f : spkVol) * OUT_HEADROOM;
+  for (int i = 0; i < 6; i++) { playToneVol(1000, 300, vol); playToneVol(700, 300, vol); }
+  i2sWrite(z, sizeof(z));
+  speaking = false;
+  i2sStop();
+}
+
+void serviceAudio() {
+  if (sosRequest) { sosRequest = false; playSos(); }                           // runs on the network core, the only place that touches the speaker after boot
   if (clipRequest >= 0) { int c = clipRequest; clipRequest = -1; playClip(c); }
   if (beepRequest > 0)  { int c = beepRequest; beepRequest = 0; beepPattern(c); }
 }
@@ -1352,6 +1370,22 @@ void handleExtras(const String& r) {
   if (r.indexOf("\"mute\":") >= 0 && m != muted) { muted = m; prefs.putBool("muted", m); }
   char ver[24], url[220];
   char tok[64];
+  if (r.indexOf("\"sos\":true") >= 0) { sosRequest = true; Serial.println("[sos] alarm requested from the app"); }
+  char nm[40];
+  if (jsonStr(r, "name", nm, sizeof(nm)) && nm[0] && strcmp(nm, deviceName) != 0) {   // the app renamed this pod
+    strlcpy(deviceName, nm, sizeof(deviceName)); prefs.putString("name", String(deviceName));
+  }
+  int li = r.indexOf("\"lim\":[");
+  if (li >= 0) {                                  // limits chosen in the app, used for the pod's own offline advice
+    const char* p = r.c_str() + li + 7;
+    float v[16]; int got = 0;
+    while (got < 16 && *p && *p != ']') {
+      while (*p == ' ' || *p == ',') p++;
+      if (strncmp(p, "null", 4) == 0) { v[got++] = NAN; p += 4; }
+      else { char* e; float f = strtof(p, &e); if (e == p) break; v[got++] = f; p = e; }
+    }
+    if (got == 16) for (int m = 0; m < 4; m++) { LIM[m].wH = v[m * 4]; LIM[m].bH = v[m * 4 + 1]; LIM[m].wL = v[m * 4 + 2]; LIM[m].bL = v[m * 4 + 3]; }
+  }
   if (jsonStr(r, "deviceToken", tok, sizeof(tok)) && strlen(tok) >= 12 && cfgTok != tok) {   // the cloud gave this pod its own private key
     cfgTok = tok; prefs.putString("tok", cfgTok);
     Serial.println("[net] received this pod's private cloud token");
