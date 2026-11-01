@@ -20,7 +20,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Configure Vercel CLI Auth & Deploy
+      - name: Run unit & e2e tests and TypeScript check
+        run: |
+          npx tsc --noEmit
+          npm test
+
+      - name: Configure Vercel CLI Auth, Set DEVICE_KEY & Deploy
         run: |
           npm install -g vercel@latest
           mkdir -p ~/.local/share/com.vercel.cli
@@ -38,23 +43,37 @@ jobs:
           '
           vercel whoami
           TOKEN=$(node -e "const fs=require('fs'); const a=JSON.parse(fs.readFileSync(process.env.HOME+'/.local/share/com.vercel.cli/auth.json','utf8')); console.log(a.token);")
-          echo "Creating/updating ecovital project on Vercel..."
-          curl -s -X POST "https://api.vercel.com/v10/projects?teamId=team_SL5Y6EsCAcLWiNjEkyMOhLMU" \
+          echo "Setting DEVICE_KEY on Vercel project ecovital..."
+          curl -s -X POST "https://api.vercel.com/v10/projects/ecovital/env?upsert=true&teamId=team_SL5Y6EsCAcLWiNjEkyMOhLMU" \
             -H "Authorization: Bearer $TOKEN" \
             -H "Content-Type: application/json" \
-            -d '{
-              "name": "ecovital",
-              "framework": "nextjs",
-              "gitRepository": {
-                "type": "github",
-                "repo": "shamzrepha/ecovital"
+            -d '[
+              {
+                "key": "DEVICE_KEY",
+                "value": "evk_6450a3caa5e01e24638ef4e6",
+                "type": "encrypted",
+                "target": ["production", "preview", "development"]
+              },
+              {
+                "key": "NEXT_PUBLIC_DEMO",
+                "value": "1",
+                "type": "plain",
+                "target": ["production", "preview", "development"]
+              },
+              {
+                "key": "FIREBASE_DATABASE_URL",
+                "value": "https://saryx-robot-shamz-default-rtdb.europe-west1.firebasedatabase.app",
+                "type": "plain",
+                "target": ["production", "preview", "development"]
               }
-            }' > /tmp/vercel_proj.json || true
-          cat /tmp/vercel_proj.json
-          echo ""
+            ]' > /tmp/vercel_env.json || true
           vercel link --yes --project ecovital --scope team_SL5Y6EsCAcLWiNjEkyMOhLMU || vercel link --yes --project ecovital
           URL=$(vercel deploy --prod --yes --scope team_SL5Y6EsCAcLWiNjEkyMOhLMU || vercel deploy --prod --yes)
           echo "=== LIVE VERCEL URL: $URL ==="
+          sleep 3
+          HEALTH=$(curl -s "https://ecovital-phi.vercel.app/api/health" || echo '{"ok":false}')
+          echo "=== LIVE /api/health ==="
+          echo "$HEALTH"
           curl -s -X PUT "https://saryx-robot-shamz-default-rtdb.europe-west1.firebasedatabase.app/ecovital/deployment.json" \
             -H "Content-Type: application/json" \
-            -d "{\"vercelUrl\":\"$URL\",\"deployedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"
+            -d "{\"vercelUrl\":\"$URL\",\"alias\":\"https://ecovital-phi.vercel.app\",\"health\":$HEALTH,\"deployedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}"

@@ -35,6 +35,9 @@
 #include <ArduinoOTA.h>
 #include <HTTPUpdate.h>
 #include <esp_system.h>
+#if __has_include(<esp_mac.h>)
+  #include <esp_mac.h>
+#endif
 // Arduino-ESP32 3.x uses the new I2S driver; including the old one there crashes at boot (driver conflict).
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
   #define NEW_I2S 1
@@ -53,16 +56,16 @@
 //====================================================================
 #define DEFAULT_SSID  "YOUR_WIFI_NAME"
 #define DEFAULT_PASS  "YOUR_WIFI_PASSWORD"// 
-#define DEFAULT_BASE  "https://your-app.vercel.app"   // no trailing slash
+#define DEFAULT_BASE  "https://ecovital-phi.vercel.app"   // no trailing slash
 #define DEFAULT_KEY   "the-same-DEVICE_KEY-you-set-on-Vercel"
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION   "1.1"
+#define FW_VERSION "1.4"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
-String cfgSsid, cfgPass, cfgBase, cfgKey;                 // saved settings
+String cfgSsid, cfgPass, cfgBase, cfgKey, cfgTok;   // cfgTok = this pod's private token from the cloud                 // saved settings
 char deviceId[24]   = "ecovital-000000";                  // from the chip's MAC address, never changes
 char deviceName[40] = "EcoVital Pod";
 char claimCode[8]   = "------";                           // 6-character pairing code shown on the pod
@@ -77,9 +80,10 @@ volatile bool  muted  = false;
 #define DEVICE_ID   deviceId
 #define DEVICE_NAME deviceName
 
-#define SPEAKER_VOLUME spkVol    // loudness of beeps and AI voice, set from the app
-#define CLIP_VOLUME spkVol
-#define WELCOME_VOLUME spkVol
+#define OUT_HEADROOM 0.80f       // loudest peak = 80% of full scale: full scale clips the amp and speaker and sounds scrambled
+#define SPEAKER_VOLUME (spkVol * OUT_HEADROOM)    // loudness of beeps and AI voice, set from the app
+#define CLIP_VOLUME (spkVol * OUT_HEADROOM)
+#define WELCOME_VOLUME (spkVol * OUT_HEADROOM)
 #define UPLOAD_EVERY_MS 15000    // how often readings are sent
 #define SAMPLE_EVERY_MS 5000     // how often a reading is recorded
 // =====================================================================
@@ -92,7 +96,7 @@ volatile bool  muted  = false;
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
 GFXcanvas16 cardCanvas(74, 51);
-GFXcanvas16 headerCanvas(160, 16);
+GFXcanvas16 headerCanvas(160, 15);
 
 // ---------- SENSOR PINS ----------
 #define PIN_MQ       34
@@ -164,8 +168,8 @@ struct Sample {
   uint8_t st[4];
 };
 
-// ---------- RING BUFFER (survives Wi-Fi outages, about 10 minutes) ----------
-#define RING 120
+// ---------- RING BUFFER (survives Wi-Fi outages, about 1 hour; readings keep their age and are sent later) ----------
+#define RING 720
 #define BATCH 24
 Sample ring[RING];
 volatile int rHead = 0, rCount = 0;
@@ -237,10 +241,10 @@ uint16_t blendHalf(uint16_t c1, uint16_t c2) {
 }
 
 //                   x   y   title   unit  min  max  warn bad  invert lowWarn words                              good    target anim valid  last...
-SmartWidget wAir  = {  4, 20, "AIR",  "%",  0, 100,  70,  45, true,  NAN, {"GOOD","FAIR","POOR","--"},  COL_MINT, 100, 100, false, -1, -1, 255, false };
-SmartWidget wDust = { 82, 20, "DUST", "%",  0, 100,  35,  65, false, NAN, {"LOW", "MOD", "HIGH","--"},  COL_MINT,   0,   0, false, -1, -1, 255, false };
-SmartWidget wTemp = {  4, 74, "TEMP", "C",  0,  50,  30,  36, false, 16,  {"OK",  "WARM","HOT", "COOL"},COL_CYAN,  24,  24, false, -1, -1, 255, false };
-SmartWidget wHum  = { 82, 74, "HUM",  "%",  0, 100,  68,  82, false, 30,  {"OK",  "DAMP","WET", "DRY"}, COL_MINT,  50,  50, false, -1, -1, 255, false };
+SmartWidget wAir  = {  4, 15, "AIR",  "%",  0, 100,  70,  45, true,  NAN, {"GOOD","FAIR","POOR","--"},  COL_MINT, 100, 100, false, -1, -1, 255, false };
+SmartWidget wDust = { 82, 15, "DUST", "%",  0, 100,  35,  65, false, NAN, {"LOW", "MOD", "HIGH","--"},  COL_MINT,   0,   0, false, -1, -1, 255, false };
+SmartWidget wTemp = {  4, 67, "TEMP", "C",  0,  50,  30,  36, false, 16,  {"OK",  "WARM","HOT", "COOL"},COL_CYAN,  24,  24, false, -1, -1, 255, false };
+SmartWidget wHum  = { 82, 67, "HUM",  "%",  0, 100,  68,  82, false, 30,  {"OK",  "DAMP","WET", "DRY"}, COL_MINT,  50,  50, false, -1, -1, 255, false };
 
 SmartWidget* widgets[4] = { &wAir, &wDust, &wTemp, &wHum };
 
@@ -371,6 +375,14 @@ int lastHeaderState = -1;
 int lastHeaderBlink = -1;
 int lastHeaderNet = -1;
 int lastHeaderSpeak = -2;
+int lastHeaderWifi = -2;
+String lastFooter = "";
+
+int wifiBars() {                                  // 0-4 bars from signal strength, -1 = not connected
+  if (WiFi.status() != WL_CONNECTED) return -1;
+  int r = WiFi.RSSI();
+  return r > -55 ? 4 : r > -65 ? 3 : r > -75 ? 2 : r > -85 ? 1 : 0;
+}
 
 void updateHeader(unsigned long now) {
   bool any = false;
@@ -397,9 +409,10 @@ void updateHeader(unsigned long now) {
 
   int blink = (now / 700) & 1;
   int net = netState;
+  int bars = wifiBars();
   int speak = speaking ? (int)((now / 130) % 6) : -1;     // animated equaliser while speaking
-  if (state == lastHeaderState && blink == lastHeaderBlink && net == lastHeaderNet && speak == lastHeaderSpeak) return;
-  lastHeaderState = state; lastHeaderBlink = blink; lastHeaderNet = net; lastHeaderSpeak = speak;
+  if (state == lastHeaderState && blink == lastHeaderBlink && net == lastHeaderNet && speak == lastHeaderSpeak && bars == lastHeaderWifi) return;
+  lastHeaderState = state; lastHeaderBlink = blink; lastHeaderNet = net; lastHeaderSpeak = speak; lastHeaderWifi = bars;
 
   const char* text;
   uint16_t col;
@@ -414,29 +427,61 @@ void updateHeader(unsigned long now) {
   headerCanvas.fillScreen(COL_BG);
   headerCanvas.setTextSize(1);
   headerCanvas.setTextColor(ST77XX_WHITE);
-  headerCanvas.setCursor(5, 5);
+  headerCanvas.setCursor(4, 4);
   headerCanvas.print("EcoVital");
-
-  // cloud dot: green = uploading, amber = Wi-Fi but no upload yet, grey = no Wi-Fi
-  uint16_t nc = (net == 2) ? COL_MINT : (net == 1) ? COL_AMBER : COL_TRACK;
-  headerCanvas.fillCircle(60, 8, 3, nc);
 
   if (speak >= 0) {
     static const uint8_t pat[6][3] = {{3,8,5},{6,4,8},{8,6,3},{4,8,6},{7,3,8},{5,7,4}};
     for (int b = 0; b < 3; b++) {
       int h = pat[speak][b];
-      headerCanvas.fillRect(67 + b * 3, 14 - h, 2, h, ST77XX_WHITE);
+      headerCanvas.fillRect(55 + b * 3, 11 - h, 2, h, ST77XX_WHITE);
     }
   }
 
-  headerCanvas.fillRoundRect(76, 2, 80, 13, 6, COL_CARD);
-  headerCanvas.drawRoundRect(76, 2, 80, 13, 6, COL_CARD_EDGE);
-  headerCanvas.fillCircle(83, 8, 2, blink ? col : blendHalf(col, COL_CARD));
+  headerCanvas.fillRoundRect(63, 1, 72, 13, 6, COL_CARD);
+  headerCanvas.drawRoundRect(63, 1, 72, 13, 6, COL_CARD_EDGE);
+  headerCanvas.fillCircle(70, 7, 2, blink ? col : blendHalf(col, COL_CARD));
   headerCanvas.setTextColor(col);
-  headerCanvas.setCursor(90, 5);
+  headerCanvas.setCursor(77, 4);
   headerCanvas.print(text);
 
-  tft.drawRGBBitmap(0, 0, headerCanvas.getBuffer(), 160, 16);
+  // Wi-Fi: four bars (green = app online, amber = Wi-Fi only), or a red cross when disconnected
+  if (bars >= 0) {
+    uint16_t lit = (net == 2) ? COL_MINT : COL_AMBER;
+    for (int i = 0; i < 4; i++) {
+      int h = 3 + i * 2;
+      headerCanvas.fillRect(141 + i * 4, 12 - h + 1, 3, h, i < bars ? lit : COL_TRACK);
+    }
+  } else {
+    for (int i = 0; i < 4; i++) headerCanvas.fillRect(141 + i * 4, 12 - (3 + i * 2) + 1, 3, 3 + i * 2, COL_CARD_EDGE);
+    for (int d = 0; d < 2; d++) {
+      headerCanvas.drawLine(141 + d, 3, 154 + d, 12, COL_CORAL);
+      headerCanvas.drawLine(154 + d, 3, 141 + d, 12, COL_CORAL);
+    }
+  }
+
+  tft.drawRGBBitmap(0, 0, headerCanvas.getBuffer(), 160, 15);
+}
+
+void drawFooter() {                                 // bottom line: IP address, or "Disconnected", and readings saved for later
+  bool on = WiFi.status() == WL_CONNECTED;
+  String key = on ? WiFi.localIP().toString() : String("-");
+  int saved = (netState != 2) ? ringCount() : 0;
+  key += "|"; key += saved;
+  if (key == lastFooter) return;
+  lastFooter = key;
+  tft.fillRect(0, 118, 160, 10, COL_BG);
+  tft.setTextSize(1);
+  tft.setCursor(5, 120);
+  if (on) { tft.setTextColor(COL_SUBTEXT); tft.print("IP "); tft.print(WiFi.localIP().toString()); }
+  else    { tft.setTextColor(COL_CORAL);   tft.print("Disconnected"); }
+  if (saved > 0) {
+    char b[16];
+    snprintf(b, sizeof(b), "saved %d", saved);
+    tft.setTextColor(COL_AMBER);
+    tft.setCursor(160 - 5 - (int)strlen(b) * 6, 120);
+    tft.print(b);
+  }
 }
 
 // ---------- SENSORS ----------
@@ -691,6 +736,18 @@ uint8_t  histN[4] = {0, 0, 0, 0};
 int      pendingClip = -1, pendingPrio = 0;
 uint32_t pendingAt = 0;
 
+// ----- on-device "mini AI": trends, early warnings and plain advice (works with no Wi-Fi) -----
+#define TREND_N 180                              // one point every 20 s = the last hour, for the pod's own web page
+float   trendV[4][TREND_N];
+int     trendNext = 0, trendFilled = 0;
+float   slopeMin[4] = {0, 0, 0, 0};              // change per minute over the last 2 minutes
+int     predMin[4]  = {-1, -1, -1, -1};          // minutes until it leaves the healthy range, -1 = not heading there
+char    adviceText[112] = "Reading the sensors...";
+uint8_t adviceLevel = 0;                         // 0 fine, 1 watch, 2 bad, 3 early warning
+uint32_t adviceAt = 0;
+const char* rapidMsg = nullptr;
+uint32_t rapidMsgAt = 0;
+
 uint8_t classifyLocal(int m, float v, uint8_t prev) {
   const Lim& L = LIM[m];
   if (!isnan(L.bH) && (v >= L.bH || (prev == ST_BAD_H && v > L.bH - L.hyst))) return ST_BAD_H;
@@ -747,14 +804,86 @@ void localAlertStep(uint32_t now) {            // called once per recorded readi
   if (lastRapidAt == 0 || now - lastRapidAt >= 300000) {
     if (histN[2] >= 18) {
       float d = hist[2][histN[2] - 1] - hist[2][0];
-      if (d <= -1.5f) { lastRapidAt = now; queueClip(CLIP_TEMP_DROP, 70, now); }
-      else if (d >= 1.5f) { lastRapidAt = now; queueClip(CLIP_TEMP_RISE, 70, now); }
+      if (d <= -1.5f) { lastRapidAt = now; rapidMsg = "Temperature is dropping rapidly. Close the windows or turn off the AC."; rapidMsgAt = now; queueClip(CLIP_TEMP_DROP, 70, now); }
+      else if (d >= 1.5f) { lastRapidAt = now; rapidMsg = "Temperature is rising rapidly. Turn on the fan or AC."; rapidMsgAt = now; queueClip(CLIP_TEMP_RISE, 70, now); }
     }
     if (histN[0] >= 13 && locStatus[0] < ST_BAD_H && lastRapidAt != now) {
       float d = hist[0][histN[0] - 1] - hist[0][histN[0] - 13];
-      if (d >= 25.0f) { lastRapidAt = now; queueClip(CLIP_DUST_SPIKE, 70, now); }
+      if (d >= 25.0f) { lastRapidAt = now; rapidMsg = "Dust just spiked. Open a window or turn on the fan."; rapidMsgAt = now; queueClip(CLIP_DUST_SPIKE, 70, now); }
     }
   }
+}
+
+void pushTrend(uint32_t now) {
+  static uint32_t last = 0;
+  if (last && now - last < 20000) return;
+  last = now ? now : 1;
+  float v[4] = { curDust, mqReady ? curAir : NAN, dhtFailed ? NAN : curTemp, dhtFailed ? NAN : curHum };
+  for (int m = 0; m < 4; m++) trendV[m][trendNext] = v[m];
+  trendNext = (trendNext + 1) % TREND_N;
+  if (trendFilled < TREND_N) trendFilled++;
+}
+
+void predictStep() {
+  for (int m = 0; m < 4; m++) {
+    slopeMin[m] = 0; predMin[m] = -1;
+    int n = histN[m];
+    if (n < 12) continue;
+    int k = n < 24 ? n : 24;
+    const float* h = hist[m] + (n - k);
+    float sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (int i = 0; i < k; i++) { sx += i; sy += h[i]; sxx += (float)i * i; sxy += i * h[i]; }
+    float den = k * sxx - sx * sx;
+    if (den <= 0) continue;
+    float slope = (k * sxy - sx * sy) / den;           // per 5 s sample
+    slopeMin[m] = slope * 12.0f;
+    if (locStatus[m] != ST_OK) continue;
+    if (fabsf(slopeMin[m] * 2.0f) < LIM[m].hyst) continue;   // too small to be real
+    float cur = h[k - 1], lim = NAN;
+    if (slope > 0 && !isnan(LIM[m].wH)) lim = LIM[m].wH;
+    if (slope < 0 && !isnan(LIM[m].wL)) lim = LIM[m].wL;
+    if (isnan(lim)) continue;
+    float t = (lim - cur) / slopeMin[m];
+    if (t > 0 && t <= 15) predMin[m] = (int)ceilf(t);
+  }
+}
+
+void setAdvice(const char* t, uint8_t lvl) {
+  if (adviceLevel == lvl && strcmp(adviceText, t) == 0) return;
+  strlcpy(adviceText, t, sizeof(adviceText));
+  adviceLevel = lvl;
+  adviceAt = millis();
+}
+
+const char* adviceFor(int m, uint8_t st) {
+  switch (m) {
+    case 0: return st == ST_BAD_H ? "Dust is very high. Open the windows and turn on the fan now." : "Dust is rising. Open a window or turn on the fan.";
+    case 1: return st == ST_BAD_L ? "Air quality is poor. Open the windows and turn on the fan." : "Air quality is fair. Open a window to freshen the air.";
+    case 2: if (st == ST_BAD_H) return "It is too hot. Turn on the AC and open a window.";
+            if (st == ST_WATCH_H) return "It is getting warm. Turn on the fan or AC.";
+            return "It is cold. Close the windows.";
+    default: if (st == ST_BAD_H) return "Humidity is very high. Turn on the AC or fan and open a window.";
+             if (st == ST_WATCH_H) return "Humidity is high. Turn on the fan or AC.";
+             return "The air is dry. A humidifier or a bowl of water can help.";
+  }
+}
+
+void refreshAdvice(uint32_t now) {
+  int bestM = -1, bestSev = 0;
+  for (int m = 0; m < 4; m++) { int sv = sevOf(locStatus[m]); if (sv > bestSev) { bestSev = sv; bestM = m; } }
+  if (bestM >= 0) { setAdvice(adviceFor(bestM, locStatus[bestM]), bestSev == 2 ? 2 : 1); return; }
+  if (rapidMsg && now - rapidMsgAt < 300000) { setAdvice(rapidMsg, 1); return; }
+  static const char* NAMES[4] = { "Dust", "Air quality", "Temperature", "Humidity" };
+  int pm = -1, bestT = 99;
+  for (int m = 0; m < 4; m++) if (predMin[m] > 0 && predMin[m] < bestT) { bestT = predMin[m]; pm = m; }
+  if (pm >= 0) {
+    char b[112];
+    snprintf(b, sizeof(b), "%s is %s and may leave the healthy range in about %d min.", NAMES[pm], slopeMin[pm] > 0 ? "rising" : "falling", bestT);
+    setAdvice(b, 3);
+    return;
+  }
+  if (!mqReady) { setAdvice("Air sensor is warming up. Air readings are still settling.", 0); return; }
+  setAdvice("All readings are within healthy limits.", 0);
 }
 
 void servicePending(uint32_t now) {             // called every loop
@@ -786,8 +915,8 @@ void playClip(int id) {
   int16_t frames[512 * 2];
   int fi = 0;
   for (uint32_t i = 0; i < n; i++) {
-    int16_t a = ulaw2lin(pgm_read_byte(d + i)) * 4;          // 12 kHz -> 24 kHz: each sample plus the midpoint
-    int16_t b = (i + 1 < n) ? ulaw2lin(pgm_read_byte(d + i + 1)) * 4 : a;
+    int16_t a = ulaw2lin(pgm_read_byte(d + i));              // 12 kHz -> 24 kHz: each sample plus the midpoint
+    int16_t b = (i + 1 < n) ? ulaw2lin(pgm_read_byte(d + i + 1)) : a;
     int16_t o[2] = { a, (int16_t)(((int32_t)a + b) / 2) };
     for (int k = 0; k < 2; k++) {
       int32_t v = (int32_t)(o[k] * CLIP_VOLUME);
@@ -815,9 +944,15 @@ bool apActive = false, netServicesUp = false;
 volatile bool otaBusy = false, otaPending = false;
 volatile int otaPct = 0;
 char otaUrlBuf[220] = "";
+char otaVerBuf[24] = "";
+uint32_t otaBackoffUntil = 0;
 bool wasOta = false;
 int otaDrawnPct = -1;
-uint32_t infoUntil = 0, infoDrawnAt = 0;
+uint32_t infoUntil = 0, infoDrawnAt = 0, infoStripAt = 0;
+volatile uint32_t lastClientMs = 0;
+volatile bool calibrateReq = false;      // last time a phone/app/browser talked to the pod
+bool bootInfo = false;                   // true while the start-up pairing screen is held
+int infoSig = -1;
 
 void loadIdentity() {
   uint8_t mac[6];
@@ -826,6 +961,7 @@ void loadIdentity() {
   snprintf(deviceId, sizeof(deviceId), "ecovital-%02x%02x%02x", mac[3], mac[4], mac[5]);
   snprintf(apName, sizeof(apName), "EcoVital-%02X%02X", mac[4], mac[5]);
   snprintf(deviceName, sizeof(deviceName), "EcoVital Pod %02X%02X", mac[4], mac[5]);
+  { String nm = prefs.getString("name", ""); if (nm.length()) nm.toCharArray(deviceName, sizeof(deviceName)); }
   String c = prefs.getString("claim", "");
   if (c.length() != 6) {
     const char* A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -841,6 +977,7 @@ void loadIdentity() {
   cfgPass = prefs.getString("pass", wiped ? "" : DEFAULT_PASS);
   cfgBase = prefs.getString("base", DEFAULT_BASE);
   cfgKey  = prefs.getString("key",  DEFAULT_KEY);
+  cfgTok  = prefs.getString("tok",  "");
   while (cfgBase.endsWith("/")) cfgBase.remove(cfgBase.length() - 1);
   if (cfgSsid == "YOUR_WIFI_NAME") cfgSsid = "";
   spkVol = prefs.getUChar("vol", 100) / 100.0f;
@@ -864,6 +1001,7 @@ void forceRedraw() {
   tft.fillScreen(COL_BG);
   for (int i = 0; i < 4; i++) widgets[i]->lastAng = -1;
   lastHeaderState = -1;
+  lastFooter = "";
 }
 
 void resetWifiAndRestart() {
@@ -906,29 +1044,181 @@ String jsonInfo() {
   return s;
 }
 
-static const char PAGE_HEAD[] PROGMEM = R"EV(<!doctype html><html><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>EcoVital pod</title><style>body{font-family:system-ui,sans-serif;margin:0;background:#0d2136;color:#e2eefa}main{max-width:460px;margin:auto;padding:18px}h1{margin:0 0 2px}.c{background:#123150;border-radius:10px;padding:14px;margin:12px 0;line-height:1.6}.code{font-size:34px;letter-spacing:6px;font-weight:700;color:#62c1f0}input{width:100%;box-sizing:border-box;padding:10px;margin:4px 0 10px;border-radius:6px;border:1px solid #5f86ab;background:#0d2136;color:#e2eefa;font-size:16px}button{padding:12px 16px;border:0;border-radius:8px;background:#2f9e5f;color:#fff;font-size:16px}button.r{background:#a13a2f}small{color:#9bb7d1}</style></head><body><main>)EV";
+static const char POD_PAGE[] PROGMEM =
+  "<!doctype html><html lang=en><head><meta charset=utf-8><meta name=viewport content=\"width=device-width,initial-scale=1\"><title>EcoVital pod</title><style>\n"
+  ":root{--paper:#edf1ea;--panel:#f6f8f3;--ink:#14211b;--ink2:#55665d;--rule:#c9d3c5;--good:#2b9a6f;--watch:#c98618;--bad:#cf4336;--fc:#4252cf;--bw:rgba(201,134,24,.14);--bb:rgba(207,67,54,.15);color-scheme:light dark}\n"
+  "@media(prefers-color-scheme:dark){:root{--paper:#0e1512;--panel:#131c18;--ink:#e4ece6;--ink2:#94a79d;--rule:#26332c;--good:#46c391;--watch:#e8a93b;--bad:#f06b5d;--fc:#8d99ff;--bw:rgba(232,169,59,.13);--bb:rgba(240,107,93,.16)}}\n"
+  "*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 \"Segoe UI Variable Text\",\"Segoe UI\",system-ui,sans-serif;font-variant-numeric:tabular-nums}\n"
+  "button,input,select{font:inherit;color:inherit}.wrap{max-width:1000px;margin:0 auto;padding:0 16px 56px}\n"
+  ".top{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:20px 0 10px}.brand{font-size:18px;font-weight:650}.crumb,.sub{color:var(--ink2)}.sp{flex:1}\n"
+  ".live{display:inline-flex;align-items:center;gap:8px;color:var(--ink2);font-size:13px}.dot{width:9px;height:9px;border-radius:50%;background:var(--ink2);flex:none}.dot.good{background:var(--good)}.dot.watch{background:var(--watch)}.dot.bad{background:var(--bad)}\n"
+  ".tabs{display:flex;gap:6px;margin:4px 0 18px}.btn{border:1px solid var(--rule);background:transparent;padding:6px 13px;border-radius:6px;cursor:pointer}.btn:hover{background:var(--panel)}.btn.on{background:var(--ink);color:var(--paper);border-color:var(--ink)}.btn.p{background:var(--good);border-color:var(--good);color:#fff}.btn.d{border-color:var(--bad);color:var(--bad)}\n"
+  ".said{border-left:4px solid var(--rule);padding:6px 0 6px 18px;margin:6px 0 24px;max-width:70ch}.said.l1{border-color:var(--watch)}.said.l2{border-color:var(--bad)}.said.l3{border-color:var(--fc)}.said q{display:block;quotes:none;font-size:23px;line-height:1.3;letter-spacing:-.01em}.said .m{margin-top:6px;color:var(--ink2);font-size:13px}\n"
+  ".cols{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:30px;align-items:start}@media(max-width:860px){.cols{grid-template-columns:1fr}}\n"
+  ".metric{padding:14px 0 16px;border-top:1px solid var(--rule)}.mh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.mh b{font-weight:600}.val{font-size:34px;font-weight:600;letter-spacing:-.02em;margin-left:auto}.val small{font-size:15px;font-weight:400;color:var(--ink2);margin-left:2px}\n"
+  ".pill{font-size:12px;padding:1px 9px;border-radius:99px;border:1px solid currentColor}.pill.good{color:var(--good)}.pill.watch{color:var(--watch)}.pill.bad{color:var(--bad)}\n"
+  "canvas{width:100%;height:76px;display:block;margin-top:6px}.note{color:var(--ink2);font-size:13px}.note.f{color:var(--fc)}\n"
+  ".side h3,.set h3{font-size:13px;font-weight:600;color:var(--ink2);margin:0 0 8px;letter-spacing:.02em}.kv{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-top:1px solid var(--rule)}.kv span:first-child{color:var(--ink2)}.kv span:last-child{text-align:right;word-break:break-all}\n"
+  ".banner{background:var(--panel);border:1px solid var(--rule);border-left:4px solid var(--watch);padding:10px 14px;margin:0 0 16px;border-radius:4px}\n"
+  ".set{max-width:560px}.set section{padding:16px 0;border-top:1px solid var(--rule)}label{display:block;color:var(--ink2);font-size:13px;margin:10px 0 3px}\n"
+  "input[type=text],input[type=password],input[type=url],select{width:100%;padding:9px 10px;border:1px solid var(--rule);border-radius:6px;background:var(--panel)}input[type=range]{width:100%}\n"
+  ".row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}.hint{color:var(--ink2);font-size:13px;margin:6px 0 0}.hide{display:none}\n"
+  "</style></head><body><div class=wrap>\n"
+  "<div class=top><span class=brand>EcoVital</span><span class=crumb id=nm>Pod</span><span class=sp></span><span class=live><i class=dot id=ld></i><span id=lt>Connecting...</span></span></div>\n"
+  "<div class=tabs><button class=\"btn on\" id=t1>Live</button><button class=btn id=t2>Settings</button></div>\n"
+  "<div id=off class=\"banner hide\">The pod is not answering. Check that it is powered and that this device is on the same Wi-Fi.</div>\n"
+  "<div id=v1><div class=said id=sd><q id=sq>Reading the sensors...</q><div class=m id=sm></div></div>\n"
+  "<div class=cols><div id=ms></div><div class=side><h3>This pod</h3><div id=kv></div></div></div></div>\n"
+  "<div id=v2 class=\"set hide\">\n"
+  "<section><h3>Wi-Fi</h3><label for=ssid>Network name</label><input type=text id=ssid autocomplete=off list=nets><datalist id=nets></datalist>\n"
+  "<label for=pass>Password</label><input type=password id=pass autocomplete=off>\n"
+  "<div class=row><button class=btn id=scan>Find networks</button><span class=hint id=sh></span></div></section>\n"
+  "<section><h3>EcoVital app</h3><label for=base>App address</label><input type=url id=base placeholder=\"https://your-app.vercel.app\">\n"
+  "<label for=key>Device key</label><input type=password id=key placeholder=\"Leave empty to keep the saved key\">\n"
+  "<div class=row><button class=\"btn p\" id=sv>Save and restart pod</button></div><p class=hint>Saving Wi-Fi or app details restarts the pod. It keeps its pair code.</p></section>\n"
+  "<section><h3>This pod</h3><label for=pn>Name</label><input type=text id=pn maxlength=31>\n"
+  "<label for=vol>Speaker volume <span id=vv></span></label><input type=range id=vol min=0 max=100 step=5>\n"
+  "<div class=row><label style=\"margin:0;display:flex;gap:8px;align-items:center\"><input type=checkbox id=mu> Mute voice alerts</label><button class=btn id=sn>Save name</button></div></section>\n"
+  "<section><h3>Maintenance</h3><div class=row><button class=btn id=cal>Calibrate in clean air</button><button class=btn id=rs>Restart</button><button class=\"btn d\" id=fw>Forget Wi-Fi</button></div>\n"
+  "<p class=hint>Calibrate only after the pod has run for 5 minutes in fresh air. Forget Wi-Fi puts the pod back in setup mode.</p></section>\n"
+  "<section><h3>About</h3><div id=ab></div></section></div></div>\n"
+  "<script>\n"
+  "const $=s=>document.getElementById(s);let D=null,TR=null,fails=0,lastT=0,tab=1;\n"
+  "const M=[{k:'air',i:1,n:'Air index',u:'%',d:0,r:[0,100],t:'Relative 0-100, higher is cleaner'},{k:'dust',i:0,n:'Dust',u:'%',d:0,r:[0,100],t:'Relative 0-100 dust index'},{k:'temp',i:2,n:'Temperature',u:'°C',d:1,r:[10,45],t:''},{k:'hum',i:3,n:'Humidity',u:'%',d:0,r:[0,100],t:''}];\n"
+  "const W={air:['Clean','','','Fair','Poor'],dust:['Low','Dusty','Very dusty','',''],temp:['Comfortable','Warm','Hot','Cool','Cold'],hum:['Comfortable','Humid','Very humid','Dry','Very dry']};\n"
+  "const lv=s=>s==0?'good':(s==1||s==3)?'watch':'bad';\n"
+  "$('ms').innerHTML=M.map(m=>`<div class=metric><div class=mh><b>${m.n}</b><span class=\"pill good\" id=p_${m.k}>-</span><span class=val id=v_${m.k}>--</span></div><canvas id=c_${m.k} width=600 height=152></canvas><div class=note id=n_${m.k}>${m.t}</div></div>`).join('');\n"
+  "function show(n){tab=n;$('v1').classList.toggle('hide',n!=1);$('v2').classList.toggle('hide',n!=2);$('t1').classList.toggle('on',n==1);$('t2').classList.toggle('on',n==2);if(n==2)fillSet(true)}\n"
+  "$('t1').onclick=()=>show(1);$('t2').onclick=()=>show(2);\n"
+  "function ago(s){return s<90?s+' s':s<5400?Math.round(s/60)+' min':Math.round(s/3600)+' h'}\n"
+  "function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}\n"
+  "function spark(m){const c=$('c_'+m.k),x=c.getContext('2d'),w=c.width=c.clientWidth*2,h=c.height=152;x.clearRect(0,0,w,h);if(!D)return;\n"
+  "const [a,b]=m.r,Y=v=>h-4-(v-a)/(b-a)*(h-8),L=D.lim[m.i];\n"
+  "const band=(lo,hi,col)=>{lo=Math.max(a,lo);hi=Math.min(b,hi);if(hi>lo){x.fillStyle=col;x.fillRect(0,Y(hi),w,Y(lo)-Y(hi))}};\n"
+  "if(L[0]!=null)band(L[0],L[1]!=null?L[1]:b,css('--bw'));if(L[1]!=null)band(L[1],b,css('--bb'));\n"
+  "if(L[2]!=null)band(L[3]!=null?L[3]:a,L[2],css('--bw'));if(L[3]!=null)band(a,L[3],css('--bb'));\n"
+  "const d=TR?TR.d[m.i]:[];if(d.length<2)return;x.strokeStyle=css('--ink');x.lineWidth=3;x.lineJoin='round';x.beginPath();let on=false;\n"
+  "d.forEach((v,j)=>{if(v==null){on=false;return}const px=j/(d.length-1)*w;if(!on){x.moveTo(px,Y(v));on=true}else x.lineTo(px,Y(v))});x.stroke()}\n"
+  "function render(){if(!D)return;$('nm').textContent=D.name;document.title=D.name+' - EcoVital';\n"
+  "const s=$('sd');s.className='said l'+D.adv.lv;$('sq').textContent=D.adv.t;$('sm').textContent=(D.adv.lv==3?'Early warning from the pod. ':'')+'Updated '+ago(D.adv.age)+' ago. Worked out on the pod, so it works without Wi-Fi.';\n"
+  "M.forEach(m=>{const v=D.v[m.i],st=D.st[m.i];$('v_'+m.k).innerHTML=v==null?'--':v.toFixed(m.d)+'<small>'+m.u+'</small>';\n"
+  "const p=$('p_'+m.k);if(v==null){p.className='pill';p.textContent=m.k=='air'&&!D.mq?'Warming up':'No reading'}else{p.className='pill '+lv(st);p.textContent=W[m.k][st]}\n"
+  "let n=m.t;const sl=D.sl[m.i];if(D.pr[m.i]>0)n='May leave the healthy range in about '+D.pr[m.i]+' min';else if(v!=null&&Math.abs(sl)>=(m.k=='temp'?.3:2))n=(sl>0?'Rising':'Falling')+' about '+Math.abs(sl).toFixed(1)+' per minute';\n"
+  "const e=$('n_'+m.k);e.textContent=n;e.className='note'+(D.pr[m.i]>0?' f':'');spark(m)});\n"
+  "const on=D.wifi,k=[['Wi-Fi',on?D.ssid+' ('+D.rssi+' dBm)':(D.ap?'Setup mode':'Disconnected')],['Address',on?D.ip:'-'],['EcoVital app',D.cloud?'Online':'Offline'],\n"
+  "['Saved on pod',D.backlog+' readings'+(D.backlog&&!D.cloud?' (sent when back online)':'')],['Air sensor',D.mq?'Ready':'Warming up '+D.warm+'%'],['Clock',D.t?new Date(D.t*1000).toLocaleTimeString():'Not synced'],['Up for',ago(D.up)],['Firmware',D.fw]];\n"
+  "$('kv').innerHTML=k.map(r=>`<div class=kv><span>${r[0]}</span><span>${r[1]}</span></div>`).join('');\n"
+  "$('ld').className='dot '+(D.cloud?'good':on?'watch':'bad');$('lt').textContent=D.cloud?'Live, app online':on?'Live, app offline':'Live, no Wi-Fi'}\n"
+  "async function poll(){try{const wt=(!TR||Date.now()-lastT>10000)?1:0;const r=await fetch('/api/live'+(wt?'?trend=1':''),{cache:'no-store'});D=await r.json();if(wt){TR=D.trend;lastT=Date.now()}fails=0;$('off').classList.add('hide');render()}\n"
+  "catch(e){if(++fails>=3){$('off').classList.remove('hide');$('ld').className='dot bad';$('lt').textContent='Not answering'}}}\n"
+  "let filled=false;function fillSet(f){if(!D)return;if(f&&filled)return;filled=true;$('ssid').value=D.ssid||'';$('base').value=D.base||'';$('pn').value=D.name;$('vol').value=D.vol;$('vv').textContent=D.vol+'%';$('mu').checked=D.mute;\n"
+  "$('ab').innerHTML=[['Pair code',D.claim],['Device ID',D.id],['MAC',D.mac],['Firmware',D.fw]].map(r=>`<div class=kv><span>${r[0]}</span><span>${r[1]}</span></div>`).join('')}\n"
+  "const post=(u,o)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(o)});\n"
+  "$('vol').oninput=()=>$('vv').textContent=$('vol').value+'%';$('vol').onchange=()=>post('/api/settings',{volume:$('vol').value});$('mu').onchange=()=>post('/api/settings',{muted:$('mu').checked?1:0});\n"
+  "$('sn').onclick=async()=>{await post('/api/settings',{name:$('pn').value});D.name=$('pn').value;render()};\n"
+  "$('sv').onclick=async()=>{await post('/save',{json:1,ssid:$('ssid').value,pass:$('pass').value,base:$('base').value,key:$('key').value,name:$('pn').value});document.body.innerHTML='<div class=wrap><p class=said><q>Saved. The pod is restarting.</q></p><p class=hint>Give it about 20 seconds, then open the pod again from your Wi-Fi.</p></div>'};\n"
+  "$('cal').onclick=async()=>{if(confirm('Is the pod in fresh air and has it been on for 5 minutes?')){await post('/api/calibrate',{});$('sh').textContent='Calibrating...'}};\n"
+  "$('rs').onclick=async()=>{await post('/api/restart',{});document.body.innerHTML='<div class=wrap><p class=said><q>Restarting.</q></p></div>'};\n"
+  "$('fw').onclick=async()=>{if(confirm('Forget the saved Wi-Fi and restart in setup mode?')){await post('/reset',{});document.body.innerHTML='<div class=wrap><p class=said><q>Wi-Fi cleared. Join the EcoVital Wi-Fi to set the pod up again.</q></p></div>'}};\n"
+  "async function scan(){$('sh').textContent='Looking for networks...';try{const r=await(await fetch('/api/scan',{cache:'no-store'})).json();if(r.scanning){setTimeout(scan,1500);return}\n"
+  "$('nets').innerHTML=r.list.map(n=>`<option value=\"${n.ssid.replace(/\"/g,'&quot;')}\">${n.rssi} dBm</option>`).join('');$('sh').textContent=r.list.length+' networks found. Tap the name field to choose one.'}catch(e){$('sh').textContent='Scan failed. Type the name instead.'}}\n"
+  "$('scan').onclick=scan;poll();setInterval(poll,2000);\n"
+  "</script></div></body></html>\n"
+  "\n";
+
+String jq(const String& in) {                       // escape for JSON
+  String o; o.reserve(in.length() + 4);
+  for (size_t i = 0; i < in.length(); i++) {
+    char c = in[i];
+    if (c == '"' || c == '\\') { o += '\\'; o += c; }
+    else if ((uint8_t)c >= 32) o += c;
+  }
+  return o;
+}
+
+String buildLive(bool withTrend) {
+  bool on = WiFi.status() == WL_CONNECTED;
+  time_t tn = time(nullptr);
+  String s; s.reserve(withTrend ? 6800 : 1800);
+  s += "{\"id\":\""; s += deviceId; s += "\",\"name\":\""; s += jq(String(deviceName));
+  s += "\",\"mac\":\""; s += macStr; s += "\",\"fw\":\""; s += FW_VERSION;
+  s += "\",\"claim\":\""; s += claimCode;
+  s += "\",\"ssid\":\""; s += jq(cfgSsid); s += "\",\"base\":\""; s += jq(cfgBase);
+  s += "\",\"wifi\":"; s += on ? "true" : "false";
+  s += ",\"ap\":"; s += apActive ? "true" : "false";
+  s += ",\"rssi\":"; s += on ? String(WiFi.RSSI()) : String(0);
+  s += ",\"ip\":\""; s += on ? WiFi.localIP().toString() : String("");
+  s += "\",\"cloud\":"; s += (netState == 2 ? "true" : "false");
+  s += ",\"backlog\":"; s += String(ringCount());
+  s += ",\"mq\":"; s += mqReady ? "true" : "false";
+  s += ",\"warm\":"; s += String(mqReady ? 100 : (int)constrain((int)(millis() * 100UL / MQ_WARMUP_MS), 0, 99));
+  s += ",\"t\":"; s += String((tn > 1700000000L) ? (long)tn : 0L);
+  s += ",\"up\":"; s += String((unsigned long)(millis() / 1000));
+  s += ",\"vol\":"; s += String((int)(spkVol * 100 + 0.5f));
+  s += ",\"mute\":"; s += muted ? "true" : "false";
+  s += ",\"v\":["; s += numStr(curDust); s += ","; s += numStr(mqReady ? curAir : NAN); s += ","; s += numStr(dhtFailed ? NAN : curTemp); s += ","; s += numStr(dhtFailed ? NAN : curHum);
+  s += "],\"st\":["; for (int m = 0; m < 4; m++) { if (m) s += ","; s += String(locStatus[m]); }
+  s += "],\"sl\":["; for (int m = 0; m < 4; m++) { if (m) s += ","; s += String(slopeMin[m], 2); }
+  s += "],\"pr\":["; for (int m = 0; m < 4; m++) { if (m) s += ","; s += String(predMin[m]); }
+  s += "],\"lim\":[";
+  for (int m = 0; m < 4; m++) {
+    if (m) s += ",";
+    s += "["; s += numStr(LIM[m].wH); s += ","; s += numStr(LIM[m].bH); s += ","; s += numStr(LIM[m].wL); s += ","; s += numStr(LIM[m].bL); s += "]";
+  }
+  s += "],\"adv\":{\"t\":\""; s += jq(String(adviceText)); s += "\",\"lv\":"; s += String(adviceLevel);
+  s += ",\"age\":"; s += String((unsigned long)((millis() - adviceAt) / 1000)); s += "}";
+  if (withTrend) {
+    s += ",\"trend\":{\"step\":20,\"d\":[";
+    int start = (trendNext - trendFilled + TREND_N) % TREND_N;
+    for (int m = 0; m < 4; m++) {
+      if (m) s += ",";
+      s += "[";
+      for (int i = 0; i < trendFilled; i++) { if (i) s += ","; s += numStr(trendV[m][(start + i) % TREND_N]); }
+      s += "]";
+    }
+    s += "]}";
+  }
+  s += "}";
+  return s;
+}
 
 void handleRoot() {
-  String h = PAGE_HEAD;
-  h += "<h1>EcoVital</h1><small>"; h += deviceName; h += "</small>";
-  h += "<div class=c><small>Pair code</small><div class=code>"; h += claimCode;
-  h += "</div><small>Enter this code in the EcoVital app to add this pod.</small></div>";
-  h += "<div class=c>ID: "; h += deviceId;
-  h += "<br>MAC: "; h += macStr;
-  h += "<br>Firmware: "; h += FW_VERSION;
-  h += "<br>Wi-Fi: ";
-  if (WiFi.status() == WL_CONNECTED) { h += cfgSsid; h += " ("; h += WiFi.localIP().toString(); h += ")"; } else h += "not connected";
-  h += "<br>Cloud: "; h += (netState == 2 ? "online" : "offline");
-  h += "</div><div class=c>Dust: "; h += numStr(curDust);
-  h += " &nbsp; Air: "; h += numStr(mqReady ? curAir : NAN);
-  h += "<br>Temp: "; h += numStr(dhtFailed ? NAN : curTemp);
-  h += " &nbsp; Humidity: "; h += numStr(dhtFailed ? NAN : curHum);
-  h += "</div><form class=c method=POST action=/save><b>Wi-Fi</b><input name=ssid placeholder='Wi-Fi name'>";
-  h += "<input name=pass type=password placeholder='Wi-Fi password'><b>Cloud</b>";
-  h += "<input name=base placeholder='https://your-app.vercel.app' value='"; h += cfgBase;
-  h += "'><input name=key placeholder='Device key (leave empty to keep)'><button>Save and restart</button></form>";
-  h += "<form class=c method=POST action=/reset><button class=r>Forget Wi-Fi</button></form></main></body></html>";
-  webServer.send(200, "text/html", h);
+  lastClientMs = millis() | 1;
+  webServer.sendHeader("Cache-Control", "no-cache");
+  webServer.send_P(200, "text/html", POD_PAGE);
+}
+
+void handleScan() {
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_FAILED) { WiFi.scanNetworks(true); webServer.send(200, "application/json", "{\"scanning\":true,\"list\":[]}"); return; }
+  if (n == WIFI_SCAN_RUNNING) { webServer.send(200, "application/json", "{\"scanning\":true,\"list\":[]}"); return; }
+  String s = "{\"scanning\":false,\"list\":[";
+  int shown = 0;
+  for (int i = 0; i < n && shown < 16; i++) {
+    String name = WiFi.SSID(i);
+    if (!name.length()) continue;
+    if (shown) s += ",";
+    s += "{\"ssid\":\""; s += jq(name); s += "\",\"rssi\":"; s += String(WiFi.RSSI(i)); s += "}";
+    shown++;
+  }
+  s += "]}";
+  WiFi.scanDelete();
+  webServer.send(200, "application/json", s);
+}
+
+void handleSettings() {                               // changes that do not need a restart
+  if (webServer.hasArg("volume")) {
+    int v = constrain(webServer.arg("volume").toInt(), 0, 100);
+    spkVol = v / 100.0f; prefs.putUChar("vol", (uint8_t)v);
+  }
+  if (webServer.hasArg("muted")) { muted = webServer.arg("muted").toInt() != 0; prefs.putBool("muted", muted); }
+  if (webServer.hasArg("name")) {
+    String n = webServer.arg("name"); n.trim();
+    if (n.length()) { n.substring(0, 31).toCharArray(deviceName, sizeof(deviceName)); prefs.putString("name", String(deviceName)); }
+  }
+  if (!muted && webServer.hasArg("volume")) beepRequest = 1;
+  webServer.sendHeader("Access-Control-Allow-Origin", "*");
+  webServer.send(200, "application/json", "{\"ok\":true}");
 }
 
 void handleSave() {
@@ -939,6 +1229,8 @@ void handleSave() {
   }
   if (webServer.arg("base").length()) prefs.putString("base", webServer.arg("base"));
   if (webServer.arg("key").length())  prefs.putString("key",  webServer.arg("key"));
+  if (webServer.arg("name").length()) prefs.putString("name", webServer.arg("name").substring(0, 31));
+  if (webServer.hasArg("json")) { webServer.send(200, "application/json", "{\"ok\":true}"); delay(900); ESP.restart(); }
   webServer.send(200, "text/html", "<meta name=viewport content='width=device-width,initial-scale=1'><body style='font-family:sans-serif;background:#0d2136;color:#e2eefa;padding:24px'><h2>Saved</h2><p>The pod is restarting and will join your Wi-Fi.</p>");
   delay(900);
   ESP.restart();
@@ -953,9 +1245,20 @@ void handleReset() {
 void startWebServer() {
   webServer.on("/", HTTP_GET, handleRoot);
   webServer.on("/api/info", HTTP_GET, []() {
+    lastClientMs = millis() | 1;
     webServer.sendHeader("Access-Control-Allow-Origin", "*");
     webServer.send(200, "application/json", jsonInfo());
   });
+  webServer.on("/api/live", HTTP_GET, []() {
+    lastClientMs = millis() | 1;
+    webServer.sendHeader("Access-Control-Allow-Origin", "*");
+    webServer.sendHeader("Cache-Control", "no-store");
+    webServer.send(200, "application/json", buildLive(webServer.hasArg("trend")));
+  });
+  webServer.on("/api/scan", HTTP_GET, handleScan);
+  webServer.on("/api/settings", HTTP_POST, handleSettings);
+  webServer.on("/api/calibrate", HTTP_POST, []() { calibrateReq = true; webServer.send(200, "application/json", "{\"ok\":true}"); });
+  webServer.on("/api/restart", HTTP_POST, []() { webServer.send(200, "application/json", "{\"ok\":true}"); delay(500); ESP.restart(); });
   webServer.on("/save", HTTP_POST, handleSave);
   webServer.on("/reset", HTTP_POST, handleReset);
   webServer.onNotFound([]() {
@@ -978,6 +1281,7 @@ void onWifiUp() {                          // runs on the network core whenever 
   if (apActive) { apActive = false; dnsServer.stop(); WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA); }
   if (netServicesUp) return;
   netServicesUp = true;
+  configTime(0, 0, "pool.ntp.org", "time.google.com");     // real clock for the pod's web page
   ArduinoOTA.setHostname(deviceId);
   ArduinoOTA.setPassword(claimCode);
   ArduinoOTA.onStart([]() { otaBusy = true; otaPct = 0; });
@@ -986,9 +1290,9 @@ void onWifiUp() {                          // runs on the network core whenever 
   ArduinoOTA.onError([](ota_error_t e) { otaBusy = false; });
   ArduinoOTA.begin();                      // also starts mDNS: http://<deviceId>.local
   MDNS.addService("ecovital", "tcp", 80);
-  MDNS.addServiceTxt("ecovital", "tcp", "id", deviceId);
-  MDNS.addServiceTxt("ecovital", "tcp", "fw", FW_VERSION);
-  MDNS.addServiceTxt("ecovital", "tcp", "mac", macStr);
+  MDNS.addServiceTxt(String("ecovital"), String("tcp"), String("id"), String(deviceId));
+  MDNS.addServiceTxt(String("ecovital"), String("tcp"), String("fw"), String(FW_VERSION));
+  MDNS.addServiceTxt(String("ecovital"), String("tcp"), String("mac"), String(macStr));
   Serial.printf("[net] discoverable as %s.local (service _ecovital._tcp), pair code %s\n", deviceId, claimCode);
 }
 
@@ -1020,12 +1324,22 @@ void handleExtras(const String& r) {
   bool m = r.indexOf("\"mute\":true") >= 0;
   if (r.indexOf("\"mute\":") >= 0 && m != muted) { muted = m; prefs.putBool("muted", m); }
   char ver[24], url[220];
+  char tok[64];
+  if (jsonStr(r, "deviceToken", tok, sizeof(tok)) && strlen(tok) >= 12 && cfgTok != tok) {   // the cloud gave this pod its own private key
+    cfgTok = tok; prefs.putString("tok", cfgTok);
+    Serial.println("[net] received this pod's private cloud token");
+  }
   if (jsonStr(r, "otaVersion", ver, sizeof(ver)) && jsonStr(r, "otaUrl", url, sizeof(url))) {
-    if (strcmp(ver, FW_VERSION) != 0 && strncmp(url, "http", 4) == 0) { strcpy(otaUrlBuf, url); otaPending = true; }
+    // skip if we already installed this version (a mismatched version name must not cause an update loop) or a try just failed
+    bool tried = prefs.getString("otaTry", "") == String(ver);
+    if (strcmp(ver, FW_VERSION) != 0 && strncmp(url, "http", 4) == 0 && !tried && (int32_t)(millis() - otaBackoffUntil) >= 0) {
+      strlcpy(otaUrlBuf, url, sizeof(otaUrlBuf)); strlcpy(otaVerBuf, ver, sizeof(otaVerBuf)); otaPending = true;
+    }
   }
 }
 
 void runOta() {
+  prefs.putString("otaTry", otaVerBuf);
   Serial.printf("[ota] updating from %s\n", otaUrlBuf);
   otaBusy = true; otaPct = 0;
   WiFiClientSecure sec;
@@ -1038,6 +1352,8 @@ void runOta() {
   else r = httpUpdate.update(plain, String(otaUrlBuf));
   if (r == HTTP_UPDATE_OK) { otaPct = 100; delay(600); ESP.restart(); }
   Serial.printf("[ota] failed: %s\n", httpUpdate.getLastErrorString().c_str());
+  prefs.remove("otaTry");
+  otaBackoffUntil = millis() + 300000UL;   // try again in 5 minutes
   otaBusy = false;
 }
 
@@ -1057,6 +1373,24 @@ void drawOtaScreen() {
     otaDrawnPct = otaPct;
     tft.fillRect(20, 85, 120, 8, COL_BG);
     tft.fillRect(20, 85, constrain(otaPct, 0, 100) * 120 / 100, 8, COL_MINT);
+  }
+}
+
+extern bool mqReady;
+void infoStrip() {            // bottom line: air sensor warm-up bar, then the BOOT hint
+  tft.fillRect(0, 108, 160, 20, COL_BG);
+  tft.setTextSize(1);
+  if (!mqReady) {
+    int pct = constrain((int)(millis() * 100UL / MQ_WARMUP_MS), 0, 99);
+    tft.setTextColor(COL_AMBER);
+    tft.setCursor(6, 108); tft.print("Air sensor warming up "); tft.print(pct); tft.print("%");
+    tft.drawRoundRect(6, 120, 148, 7, 3, COL_CARD_EDGE);
+    tft.fillRect(7, 121, 146 * pct / 100, 5, COL_MINT);
+  } else {
+    tft.setTextColor(COL_MINT);
+    tft.setCursor(6, 108); tft.print("Air sensor ready");
+    tft.setTextColor(COL_SUBTEXT);
+    tft.setCursor(6, 120); tft.print("Hold BOOT 5s = forget Wi-Fi");
   }
 }
 
@@ -1081,14 +1415,19 @@ void drawInfo() {
   if (apActive) { tft.print("Setup: join "); tft.print(apName); }
   else { tft.print("Wi-Fi "); tft.print(cfgSsid.substring(0, 18)); }
   tft.setCursor(6, 102); tft.print("fw "); tft.print(FW_VERSION); tft.print("  cloud "); tft.print(netState == 2 ? "on" : "off");
-  tft.setTextColor(COL_AMBER);
-  tft.setCursor(6, 116); tft.print("Hold BOOT 5s = forget Wi-Fi");
+  infoStrip();
 }
 
 bool infoActive(uint32_t now) {
   if (!infoUntil) return false;
-  if ((int32_t)(now - infoUntil) >= 0) { infoUntil = 0; forceRedraw(); return false; }
-  if (infoDrawnAt == 0 || now - infoDrawnAt > 5000) { infoDrawnAt = now ? now : 1; drawInfo(); }
+  if ((int32_t)(now - infoUntil) >= 0) { infoUntil = 0; bootInfo = false; forceRedraw(); return false; }
+  if (bootInfo) {   // start-up screen: stay until the air sensor is warm and nobody is connected, 3 min at most
+    bool clientHere = lastClientMs && (now - lastClientMs) < 30000;
+    if (mqReady && !clientHere) { bootInfo = false; infoUntil = 0; forceRedraw(); return false; }
+  }
+  int sig = (WiFi.status() == WL_CONNECTED ? 1 : 0) | (apActive ? 2 : 0) | (netState == 2 ? 4 : 0) | (mqReady ? 8 : 0);
+  if (infoDrawnAt == 0 || sig != infoSig) { infoSig = sig; infoDrawnAt = now ? now : 1; infoStripAt = now; drawInfo(); }
+  else if (now - infoStripAt >= 1000) { infoStripAt = now; infoStrip(); }
   return true;
 }
 
@@ -1101,8 +1440,8 @@ void handleButton(uint32_t now) {          // short press: show pairing screen. 
   else if (!pressed && down) {
     down = false;
     if (!longDone && now - t0 >= 40 && now - t0 < 2500) {
-      if (infoUntil) { infoUntil = 0; forceRedraw(); }
-      else { infoUntil = now + 15000; infoDrawnAt = 0; }
+      if (infoUntil) { infoUntil = 0; bootInfo = false; forceRedraw(); }
+      else { infoUntil = now + 30000; infoDrawnAt = 0; }
     }
   }
 }
@@ -1147,7 +1486,7 @@ int postBatch(const Sample* batch, int n) {
   else http.begin(plain, url);
   http.setTimeout(20000);                    // the server may call the AI before it answers
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-Device-Key", DEVICE_KEY);
+  http.addHeader("X-Device-Key", cfgTok.length() ? cfgTok.c_str() : DEVICE_KEY);
   int code = http.POST((uint8_t*)body, pos);
   int result = -1;
   if (code == 200) {
@@ -1161,6 +1500,7 @@ int postBatch(const Sample* batch, int n) {
     }
   } else {
     Serial.printf("[net] upload failed: HTTP %d %s\n", code, code < 0 ? HTTPClient::errorToString(code).c_str() : "");
+    if (code == 401 && cfgTok.length()) { cfgTok = ""; prefs.remove("tok"); Serial.println("[net] private token rejected, falling back to the setup key"); }
   }
   http.end();
   return result;
@@ -1380,7 +1720,7 @@ void setup() {
     char codeLine[24];
     snprintf(codeLine, sizeof(codeLine), "Pair code: %s", claimCode);
     bootMsg(codeLine);
-    delay(2500);
+    delay(2200);
   } else {
     Serial.println("[wifi] could not connect. Check WIFI_SSID / WIFI_PASS (2.4 GHz network only). Will keep retrying.");
     bootBar(94);
@@ -1398,9 +1738,9 @@ void setup() {
     playMelody(ff, fd, 2);                          // "not connected" tone
   }
   bootBar(100);
-  delay(700);
+  delay(500);
 
-  tft.fillScreen(COL_BG);                           // dashboard screen takes over
+  tft.fillScreen(COL_BG);
   lastHeaderState = -1;
 
   // network + voice run on core 0, the sensors and display stay on core 1 (the Arduino loop)
@@ -1459,6 +1799,9 @@ void loop() {
     lastRecord = now;
     recordSample(now);
     localAlertStep(now);
+    predictStep();
+    refreshAdvice(now);
+    pushTrend(now);
   }
   servicePending(now);
 
@@ -1478,5 +1821,16 @@ void loop() {
       if (widgetChanged(*widgets[i])) renderWidget(*widgets[i]);
     }
     updateHeader(now);
+    static uint32_t lastFoot = 0;
+    if (now - lastFoot >= 500) { lastFoot = now; drawFooter(); }
+  }
+  if (calibrateReq) {
+    calibrateReq = false;
+    dustBaselineV = readDustVoltage(40);
+    airBaselineV  = readMqVoltage(40);
+    airCalibrated = true;
+    prefs.putFloat("dust", dustBaselineV);
+    prefs.putFloat("air",  airBaselineV);
+    Serial.println(">> Calibrated from the web page");
   }
 }

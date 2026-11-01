@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createFirmwareRelease, listFirmwareState } from "@/lib/pods";
+import { adminOk } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
@@ -9,6 +10,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (!adminOk(req)) return NextResponse.json({ ok: false, error: "Admin key required (set ADMIN_KEY or DEVICE_KEY on the server)." }, { status: 401 });
   try {
     const body = await req.json();
     const version = String(body.version || "").trim();

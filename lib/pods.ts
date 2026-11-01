@@ -42,6 +42,58 @@ export async function signInOrCreateUser(email: string, name: string) {
   return rows[0];
 }
 
+/** Remember that a pod knocked on the door, even when it was turned away (so pairing can explain why). */
+export async function noteContact(deviceId: string, claim: string | null, result: "ok" | "bad-key", fw: string | null) {
+  try {
+    const sql = await db();
+    await sql`
+      INSERT INTO pod_contact (device_id, claim, result, fw, last_at)
+      VALUES (${deviceId}, ${claim ? claim.toUpperCase() : null}, ${result}, ${fw}, now())
+      ON CONFLICT (device_id) DO UPDATE SET claim = COALESCE(EXCLUDED.claim, pod_contact.claim), result = EXCLUDED.result,
+        fw = COALESCE(EXCLUDED.fw, pod_contact.fw), last_at = now()`;
+  } catch { /* diagnostics only */ }
+}
+
+/**
+ * Authenticate a pod check-in against its private device_token (once delivered) or the shared DEVICE_KEY.
+ * Records every contact (ok or bad-key) in pod_contact.
+ */
+export async function verifyPodIngestKey(args: {
+  deviceId: string;
+  providedKey: string;
+  claim: string | null;
+  fw: string | null;
+}): Promise<{ authorized: boolean; status?: number; error?: string }> {
+  const { deviceId, providedKey, claim, fw } = args;
+  const expected = process.env.DEVICE_KEY;
+  let authorized = false;
+  try {
+    const sql = await db();
+    const rows = await sql`SELECT device_token, token_delivered FROM pods WHERE device_id = ${deviceId}`;
+    const tok = rows.length ? (rows[0].device_token as string | null) : null;
+    if (tok && providedKey === tok) {
+      authorized = true;
+      if (!rows[0].token_delivered) {
+        await sql`UPDATE pods SET token_delivered = true WHERE device_id = ${deviceId}`;
+      }
+    } else if (!!expected && providedKey === expected) {
+      // The shared key only works until the pod has confirmed its own private token.
+      authorized = !(tok && rows[0].token_delivered);
+    }
+  } catch {
+    authorized = !!expected && providedKey === expected;
+  }
+  if (!authorized) {
+    await noteContact(deviceId, claim, "bad-key", fw);
+    if (!expected) {
+      return { authorized: false, status: 500, error: "DEVICE_KEY is not configured on the server" };
+    }
+    return { authorized: false, status: 401, error: "Bad device key" };
+  }
+  await noteContact(deviceId, claim, "ok", fw);
+  return { authorized: true };
+}
+
 export interface ClaimResult {
   ok: boolean;
   locked?: boolean;
@@ -98,6 +150,15 @@ export async function claimPodByCode(args: {
     ORDER BY d.last_seen DESC NULLS LAST LIMIT 1`;
 
   if (!devRows.length) {
+    // Did a pod with this code reach the server but get turned away? Then say exactly that.
+    const seen = await sql`SELECT device_id, result, (extract(epoch from last_at) * 1000)::float8 AS t FROM pod_contact
+                           WHERE upper(claim) = ${code} ORDER BY last_at DESC LIMIT 1`;
+    if (seen.length && seen[0].result === "bad-key") {
+      return {
+        ok: false,
+        error: `This pod (${seen[0].device_id}) is reaching the server, but the server rejected its key. Set DEVICE_KEY on Vercel to the key inside the pod firmware (DEFAULT_KEY), redeploy, or enter that key on the pod's own Settings page. Then try again.`,
+      };
+    }
     const curFails = Number(lockRows[0]?.fails ?? 0) + 1;
     const lockUntil = curFails >= 5 ? iso(now + 10 * 60_000) : null;
     await sql`
@@ -107,7 +168,7 @@ export async function claimPodByCode(args: {
     return {
       ok: false,
       locked: curFails >= 5,
-      error: "We have not heard from a pod with that code yet. Check the pod is on Wi-Fi (green dot in its header) and try again in 15 seconds.",
+      error: "We have not heard from a pod with that code yet. Check that the pod shows its Wi-Fi bars in green (top right of its screen) and that its app address is this site, then try again in 15 seconds. The code is the 6 characters on the pod, not its ID.",
     };
   }
 
@@ -304,6 +365,46 @@ export async function createFirmwareRelease(args: {
     }
   }
   return { ok: true, version: ver };
+}
+
+export async function uploadFirmwareBlob(args: {
+  version: string;
+  buf: Buffer;
+  origin: string;
+  notes?: string;
+  channel?: "stable" | "beta";
+  target?: string;
+}): Promise<{ ok: boolean; status: number; error?: string; size?: number; url?: string; version?: string }> {
+  const version = (args.version || "").trim();
+  if (!/^[0-9A-Za-z][0-9A-Za-z._-]{0,19}$/.test(version)) {
+    return { ok: false, status: 400, error: "Version must be 1-20 letters, digits, dots or dashes, for example 1.4" };
+  }
+  const buf = args.buf;
+  if (buf.length < 100_000 || buf.length > 4_400_000) {
+    return { ok: false, status: 400, error: `That file is ${buf.length} bytes. A pod firmware image is about 1-3 MB.` };
+  }
+  if (buf[0] !== 0xe9) {
+    return {
+      ok: false,
+      status: 400,
+      error: "That is not an ESP32 app image (it must start with byte 0xE9). Use the .ino.bin from Export Compiled Binary, not the bootloader or merged file.",
+    };
+  }
+  const sql = await db();
+  const b64 = buf.toString("base64");
+  await sql`
+    INSERT INTO firmware_blobs (version, size, data_b64) VALUES (${version}, ${buf.length}, ${b64})
+    ON CONFLICT (version) DO UPDATE SET size = EXCLUDED.size, data_b64 = EXCLUDED.data_b64, created_at = now()`;
+  const url = `${args.origin}/api/firmware/${encodeURIComponent(version)}.bin`;
+  const target = args.target || "all";
+  const res = await createFirmwareRelease({
+    version,
+    url,
+    notes: args.notes || "",
+    channel: args.channel === "beta" ? "beta" : "stable",
+    targetPods: target === "all" ? "all" : [target],
+  });
+  return { ...res, status: 200, size: buf.length, url };
 }
 
 export async function listFirmwareState() {

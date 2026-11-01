@@ -9,7 +9,7 @@ import { forecast, type Pt } from "./predict.ts";
 import { detectAnomalies } from "./pods.ts";
 
 const num = (x: any): number | null => (x === null || x === undefined ? null : Number(x));
-const ONLINE_MS = 2 * 60_000;
+const ONLINE_MS = 60_000;
 
 export const RANGES: Record<string, { ms: number; bucketS: number; label: string }> = {
   "1h": { ms: 3600_000, bucketS: 15, label: "last hour" },
@@ -21,15 +21,20 @@ export const RANGES: Record<string, { ms: number; bucketS: number; label: string
 export function podStateLabel(online: boolean, lastSeen: number | null, now: number, simulated: boolean): {
   code: "online" | "offline" | "waiting" | "simulated";
   label: string;
+  savedCount?: number;
   offlineVoiceNote?: string;
 } {
   if (simulated) return { code: "simulated", label: "Simulated" };
   if (lastSeen === null) return { code: "waiting", label: "Waiting for cloud" };
   if (online) return { code: "online", label: "Online" };
-  const mins = Math.max(1, Math.round((now - lastSeen) / 60_000));
+  const elapsedMs = Math.max(0, now - lastSeen);
+  const mins = Math.max(1, Math.round(elapsedMs / 60_000));
+  const savedCount = Math.min(240, Math.max(1, Math.floor(elapsedMs / 15_000)));
+  const ageStr = mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
   return {
     code: "offline",
-    label: mins < 60 ? `Offline (last seen ${mins} min ago)` : `Offline (last seen ${Math.round(mins / 60)} h ago)`,
+    savedCount,
+    label: `Offline, ${savedCount} reading${savedCount === 1 ? "" : "s"} saved on the pod will arrive when it reconnects (last reading ${ageStr})`,
     offlineVoiceNote: "This pod is offline but still giving spoken advice.",
   };
 }

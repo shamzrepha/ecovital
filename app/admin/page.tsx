@@ -5,9 +5,11 @@ import { useCallback, useEffect, useState } from "react";
 export default function AdminPage() {
   const [otaState, setOtaState] = useState<any>({ releases: [], targets: [] });
   const [nodes, setNodes] = useState<any[]>([]);
-  const [version, setVersion] = useState("1.2.0");
-  const [url, setUrl] = useState("https://ecovital.vercel.app/firmware/ecovital-pod-v1.2.0.bin");
-  const [notes, setNotes] = useState("Improved MQ-135 warm-up curve and captive portal pair-code link.");
+  const [version, setVersion] = useState("1.4");
+  const [url, setUrl] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [adminKey, setAdminKey] = useState("");
+  const [notes, setNotes] = useState("");
   const [channel, setChannel] = useState<"stable" | "beta">("stable");
   const [targetMode, setTargetMode] = useState<"all" | string>("all");
   const [msg, setMsg] = useState("");
@@ -27,23 +29,36 @@ export default function AdminPage() {
 
   useEffect(() => {
     load();
+    try { setAdminKey(sessionStorage.getItem("ev-admin-key") || ""); } catch {}
   }, [load]);
 
   async function publishOta(e: React.FormEvent) {
     e.preventDefault();
-    setMsg("Publishing OTA firmware release...");
-    const res = await fetch("/api/ota", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        version,
-        url,
-        notes,
-        channel,
-        targetPods: targetMode === "all" ? "all" : [targetMode],
-      }),
-    });
-    const j = await res.json();
+    try { sessionStorage.setItem("ev-admin-key", adminKey); } catch {}
+    let res: Response;
+    if (file) {
+      setMsg(`Uploading ${(file.size / 1024).toFixed(0)} KB to the cloud...`);
+      const qs = new URLSearchParams({ version, notes, channel, target: targetMode });
+      res = await fetch(`/api/ota/upload?${qs}`, {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream", "x-admin-key": adminKey },
+        body: await file.arrayBuffer(),
+      });
+    } else {
+      setMsg("Publishing OTA firmware release...");
+      res = await fetch("/api/ota", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-admin-key": adminKey },
+        body: JSON.stringify({
+          version,
+          url,
+          notes,
+          channel,
+          targetPods: targetMode === "all" ? "all" : [targetMode],
+        }),
+      });
+    }
+    const j = await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }));
     setMsg(
       j.ok
         ? `Firmware v${version} queued! Targeted pods will receive otaVersion & otaUrl on their next /api/ingest check-in.`
@@ -107,13 +122,27 @@ export default function AdminPage() {
           </div>
 
           <div className="form-row">
-            <label htmlFor="ota-url">Compiled ESP32 Binary URL (.bin)</label>
+            <label htmlFor="ota-key">Admin key (your ADMIN_KEY or DEVICE_KEY from Vercel)</label>
+            <input id="ota-key" className="input" type="password" value={adminKey} onChange={(e) => setAdminKey(e.target.value)} required />
+          </div>
+
+          <div className="form-row">
+            <label htmlFor="ota-file">Upload compiled firmware (.ino.bin)</label>
+            <p className="note" style={{ margin: "0 0 6px" }}>
+              Arduino IDE &gt; Sketch &gt; Export Compiled Binary &gt; upload the file ending <code>.ino.bin</code>. The version typed here must equal <code>FW_VERSION</code> inside that firmware, or the pod will report a different version after updating.
+            </p>
+            <input id="ota-file" className="input" type="file" accept=".bin" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+          </div>
+
+          <div className="form-row">
+            <label htmlFor="ota-url">Or a link to a .bin you host yourself</label>
             <input
               id="ota-url"
               className="input"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              required
+              placeholder="https://..."
+              required={!file}
             />
           </div>
 
@@ -187,20 +216,28 @@ export default function AdminPage() {
                 </tr>
               </thead>
               <tbody>
-                {otaState.targets.map((t: any) => (
-                  <tr key={t.podId}>
-                    <th>
-                      <Link href={`/node/${encodeURIComponent(t.podId)}`}>{t.name || t.podId}</Link>
-                    </th>
-                    <td>v{t.currentFw || "1.1"}</td>
-                    <td>v{t.targetVersion}</td>
-                    <td>
-                      <span className={`chip ${t.currentFw === t.targetVersion ? "good" : ""}`}>
-                        {t.currentFw === t.targetVersion ? "Updated" : t.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {otaState.targets.map((t: any) => {
+                  const isUpdated = t.currentFw && t.currentFw === t.targetVersion;
+                  const statusLabel = isUpdated
+                    ? `Updated to ${t.targetVersion}`
+                    : t.status === "updating"
+                      ? "Updating"
+                      : "Queued";
+                  return (
+                    <tr key={t.podId}>
+                      <th>
+                        <Link href={`/node/${encodeURIComponent(t.podId)}`}>{t.name || t.podId}</Link>
+                      </th>
+                      <td>v{t.currentFw || "1.1"}</td>
+                      <td>v{t.targetVersion}</td>
+                      <td>
+                        <span className={`chip ${isUpdated ? "good" : ""}`}>
+                          {statusLabel}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           ) : (

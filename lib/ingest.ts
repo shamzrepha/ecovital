@@ -124,8 +124,7 @@ export async function ingest(
   // One-time device token delivery on first upload after claim
   let deviceToken: string | undefined;
   if (podRow.claimed_by && podRow.device_token && !podRow.token_delivered) {
-    deviceToken = String(podRow.device_token);
-    await sql`UPDATE pods SET token_delivered = true WHERE device_id = ${id}`;
+    deviceToken = String(podRow.device_token);   // re-sent until the pod authenticates with it (see /api/ingest)
   }
 
   // 2. validate + store (idempotent: a re-sent batch cannot create duplicates)

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { ingest } from "@/lib/ingest";
-import { db } from "@/lib/db";
+import { verifyPodIngestKey } from "@/lib/pods";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -19,23 +19,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "deviceId must be 3-40 letters, digits, - or _" }, { status: 400 });
   }
 
-  const expected = process.env.DEVICE_KEY;
   const provided = req.headers.get("x-device-key") ?? "";
-  let authorized = !!expected && provided === expected;
-  if (!authorized && provided.length >= 12) {
-    try {
-      const sql = await db();
-      const rows = await sql`SELECT device_token FROM pods WHERE device_id = ${id}`;
-      if (rows.length && rows[0].device_token && rows[0].device_token === provided) {
-        authorized = true;
-      }
-    } catch { /* ignore */ }
+  const auth = await verifyPodIngestKey({
+    deviceId: id,
+    providedKey: provided,
+    claim: str(body.claim, 8),
+    fw: str(body.fw, 20),
+  });
+  if (!auth.authorized) {
+    return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status ?? 401 });
   }
-  if (!authorized) {
-    if (!expected) return NextResponse.json({ ok: false, error: "DEVICE_KEY is not configured on the server" }, { status: 500 });
-    return NextResponse.json({ ok: false, error: "Bad device key" }, { status: 401 });
-  }
-
   const readings = Array.isArray(body.readings) ? body.readings.slice(0, 120) : [];
   if (!readings.length) return NextResponse.json({ ok: false, error: "readings[] is empty" }, { status: 400 });
 

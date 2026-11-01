@@ -105,6 +105,19 @@ const SCHEMA = [
      channel text NOT NULL DEFAULT 'stable',
      created_at timestamptz NOT NULL DEFAULT now()
    )`,
+  `CREATE TABLE IF NOT EXISTS pod_contact (
+     device_id text PRIMARY KEY,
+     claim text,
+     result text NOT NULL,
+     fw text,
+     last_at timestamptz NOT NULL DEFAULT now()
+   )`,
+  `CREATE TABLE IF NOT EXISTS firmware_blobs (
+     version text PRIMARY KEY,
+     size integer NOT NULL,
+     data_b64 text NOT NULL,
+     created_at timestamptz NOT NULL DEFAULT now()
+   )`,
   `CREATE TABLE IF NOT EXISTS pod_firmware_target (
      device_id text PRIMARY KEY,
      version text NOT NULL,

@@ -107,8 +107,8 @@ export default function DownloadAppPage() {
           </p>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14, marginBottom: 14 }}>
-            <a className="btn primary" href="/api/download/firmware" download="ecovital_pod.ino">
-              ⬇ Download ESP32 Firmware (ecovital_pod.ino)
+            <a className="btn primary" href="/api/download/firmware" download="ecovital_pod.zip">
+              ⬇ Download ESP32 Firmware (ecovital_pod.zip)
             </a>
             <Link className="btn" href="/add">
               ＋ Open 6-Char Pair Code Wizard →

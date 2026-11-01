@@ -6,6 +6,7 @@ const nextConfig = {
       "./lib/pglite-shim.mjs",
       "./node_modules/@electric-sql/pglite/**/*"
     ],
+    "/api/download/**/*": ["./firmware/**/*"],
     "/**/*": [
       "./lib/pglite-shim.mjs",
       "./node_modules/@electric-sql/pglite/**/*"

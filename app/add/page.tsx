@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { ROOM_PROFILES, type RoomProfileKey } from "@/lib/config";
 
 function AddPodWizardInner() {
@@ -18,6 +18,34 @@ function AddPodWizardInner() {
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [claimedPod, setClaimedPod] = useState<{ podId: string; deviceToken?: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [waitingSec, setWaitingSec] = useState<number>(0);
+  const [health, setHealth] = useState<any>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    setWaitingSec(0);
+  }, []);
+
+  const loadHealth = useCallback(async () => {
+    try {
+      const r = await fetch("/api/health", { cache: "no-store" });
+      if (r.ok) {
+        const j = await r.json();
+        setHealth(j);
+        return j;
+      }
+    } catch {}
+    return null;
+  }, []);
+
+  useEffect(() => {
+    loadHealth();
+    return () => stopPolling();
+  }, [loadHealth, stopPolling]);
 
   useEffect(() => {
     if (prefill && prefill.length === 6) {
@@ -27,6 +55,7 @@ function AddPodWizardInner() {
   }, [prefill]);
 
   async function seedAndUseDemoCode() {
+    stopPolling();
     setBusy(true);
     setErrorMsg("");
     setStatusMsg("Starting simulated demo pod with pair code DEMO26...");
@@ -46,30 +75,77 @@ function AddPodWizardInner() {
     }
   }
 
-  async function handleClaim(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setErrorMsg("");
-    setStatusMsg("Checking pair code with EcoVital cloud...");
-    try {
+  const attemptClaim = useCallback(
+    async (cleanCode: string) => {
       const res = await fetch("/api/claim", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          code: code.trim().toUpperCase(),
+          code: cleanCode,
           nickname,
           location,
           roomProfile,
         }),
       });
       const j = await res.json();
-      if (!res.ok || !j.ok) {
-        setErrorMsg(j.error || "Could not claim pod.");
-        setStatusMsg("");
-      } else {
+      return { ok: res.ok && !!j.ok, data: j };
+    },
+    [nickname, location, roomProfile],
+  );
+
+  async function handleClaim(e: React.FormEvent) {
+    e.preventDefault();
+    stopPolling();
+    const cleanCode = code.trim().toUpperCase();
+    setBusy(true);
+    setErrorMsg("");
+    setStatusMsg("Checking pair code with EcoVital cloud...");
+    try {
+      const { ok, data: j } = await attemptClaim(cleanCode);
+      if (ok) {
         setClaimedPod({ podId: j.podId, deviceToken: j.deviceToken });
         setStatusMsg(`Pod "${j.podId}" paired and configured!`);
         setStep(4);
+        return;
+      }
+
+      // Show the exact error message returned by /api/claim
+      setErrorMsg(j.error || "Could not claim pod.");
+      setStatusMsg("");
+
+      // If the server has not heard from the pod yet, poll /api/health every 5 s for up to 60 s
+      if (!j.locked && typeof j.error === "string" && j.error.includes("We have not heard from a pod")) {
+        let remaining = 60;
+        setWaitingSec(remaining);
+        setStatusMsg("Waiting for your pod to connect... Checking server every 5 seconds (60 s remaining).");
+        pollTimerRef.current = setInterval(async () => {
+          remaining -= 5;
+          if (remaining <= 0) {
+            stopPolling();
+            setStatusMsg("Finished waiting 60 seconds. Check your pod's Wi-Fi & App address, then try again.");
+            return;
+          }
+          setWaitingSec(remaining);
+          setStatusMsg(`Waiting for your pod to connect... Checking server every 5 seconds (${remaining} s remaining).`);
+          const h = await loadHealth();
+          const recentContact = h?.contacts?.some((c: any) => typeof c.secondsAgo === "number" && c.secondsAgo <= 20);
+          if (recentContact || remaining % 20 === 0) {
+            const retry = await attemptClaim(cleanCode);
+            if (retry.ok) {
+              stopPolling();
+              setErrorMsg("");
+              setClaimedPod({ podId: retry.data.podId, deviceToken: retry.data.deviceToken });
+              setStatusMsg(`Pod "${retry.data.podId}" connected and paired!`);
+              setStep(4);
+            } else if (retry.data?.error) {
+              setErrorMsg(retry.data.error);
+              if (retry.data.locked || retry.data.error.includes("rejected its key")) {
+                stopPolling();
+                setStatusMsg("");
+              }
+            }
+          }
+        }, 5000);
       }
     } catch (err: any) {
       setErrorMsg(err.message || "Network error");
@@ -110,8 +186,24 @@ function AddPodWizardInner() {
         ))}
       </div>
 
-      {errorMsg && <div className="banner">{errorMsg}</div>}
-      {statusMsg && <div className="banner info">{statusMsg}</div>}
+      {errorMsg && (
+        <div className="banner" role="alert">
+          <b>Pairing diagnosis:</b> {errorMsg}
+        </div>
+      )}
+      {statusMsg && (
+        <div className="banner info" role="status" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <span>
+            {waitingSec > 0 && <span className="dot good pulse" style={{ marginRight: 8 }} />}
+            {statusMsg}
+          </span>
+          {waitingSec > 0 && (
+            <button type="button" className="btn small" onClick={stopPolling}>
+              Stop waiting
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="cols">
         <main>
@@ -126,7 +218,7 @@ function AddPodWizardInner() {
                   <b>Works out of the box without Wi-Fi:</b> Even before you pair it, the pod reads its 4 sensors and speaks all 15 built-in offline voice clips locally.
                 </li>
                 <li>
-                  <b>Find your 6-character pair code:</b> Look at the bottom of the pod&rsquo;s OLED screen, on the `EcoVital-XXXX` setup page, or type <code>code</code> over USB serial (115200 baud).
+                  <b>Where to find your 6-character pair code:</b> Look on the <b>pod&rsquo;s OLED screen</b> during startup, or <b>press the BOOT button briefly</b> on the pod to display the pair code again for 30 seconds. (It is also shown on the <code>EcoVital-XXXX</code> setup page and via USB serial <code>code</code>.)
                 </li>
               </ul>
               <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
@@ -159,12 +251,11 @@ function AddPodWizardInner() {
                   in your browser.
                 </li>
                 <li>
-                  Pick your home, school, or phone hotspot Wi-Fi network, enter the password, and tap{" "}
-                  <b>Save &amp; Connect</b> (or tap <b>Open EcoVital Cloud</b> right from the pod&rsquo;s page to pre-fill your pair code).
+                  Pick your home, school, or phone hotspot Wi-Fi network, enter the password, verify the App address is set to this site and the Device key matches <code>DEVICE_KEY</code>, and tap{" "}
+                  <b>Save &amp; Connect</b>.
                 </li>
                 <li>
-                  Once on the same Wi-Fi, you can also open the pod&rsquo;s local status page anytime at{" "}
-                  <code>http://&lt;pod-id&gt;.local/</code>.
+                  Already on Wi-Fi (firmware 1.3+)? Open <code>http://&lt;IP shown at bottom of pod screen&gt;</code> &gt; <b>Settings</b> to update the App address or Device key without reflashing.
                 </li>
               </ol>
               <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
@@ -180,11 +271,11 @@ function AddPodWizardInner() {
             <form className="card" onSubmit={handleClaim}>
               <h2>Step 3 — Enter Your Pod&rsquo;s 6-Character Pair Code</h2>
               <p className="note">
-                Uses unambiguous characters (<code>ABCDEFGHJKLMNPQRSTUVWXYZ23456789</code> — no <code>0/O/1/I</code>). Locked for 15 minutes after 5 wrong attempts.
+                <b>Where to find the code:</b> Check the <b>pod&rsquo;s OLED screen</b>, or <b>press the BOOT button briefly on the pod</b> to show the 6-character pair code again for 30 seconds. Make sure the pod&rsquo;s Wi-Fi bars are green in the top-right corner of its screen.
               </p>
 
               <div className="form-row" style={{ marginTop: 12 }}>
-                <label htmlFor="pair-code">6-Character Pair Code</label>
+                <label htmlFor="pair-code">6-Character Pair Code (on pod screen — not its device ID)</label>
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                   <input
                     id="pair-code"
@@ -240,12 +331,12 @@ function AddPodWizardInner() {
                 </select>
               </div>
 
-              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <div style={{ display: "flex", gap: 10, marginTop: 16, flexWrap: "wrap" }}>
                 <button type="button" className="btn" onClick={() => setStep(2)}>
                   ← Back
                 </button>
                 <button type="submit" className="btn primary" disabled={busy || code.length < 4}>
-                  {busy ? "Pairing..." : "Pair & Claim Pod →"}
+                  {busy ? "Pairing..." : waitingSec > 0 ? `Waiting (${waitingSec}s)... Click to Retry Now` : "Pair & Claim Pod →"}
                 </button>
               </div>
             </form>
@@ -260,9 +351,9 @@ function AddPodWizardInner() {
               </p>
               {claimedPod?.deviceToken && (
                 <div className="banner info">
-                  <b>Per-Pod Device Token issued:</b> <code>{claimedPod.deviceToken}</code>
+                  <b>Per-Pod Private Token issued:</b> <code>{claimedPod.deviceToken}</code>
                   <div className="note" style={{ marginTop: 4 }}>
-                    Delivered automatically to the pod on its next <code>POST /api/ingest</code> check-in.
+                    Delivered automatically to the pod on its next <code>POST /api/ingest</code> check-in. Once confirmed by the pod, the shared setup key is no longer accepted for this pod.
                   </div>
                 </div>
               )}
@@ -283,13 +374,50 @@ function AddPodWizardInner() {
 
         <aside className="side">
           <section className="card">
-            <h2>Pod Quick Reference (v1.1)</h2>
+            <h2>Cloud Health &amp; Pod Contacts</h2>
+            {health ? (
+              <>
+                <table className="kv">
+                  <tbody>
+                    <tr>
+                      <th>Database</th>
+                      <td><span className={`chip ${health.database === "ok" ? "good" : "bad"}`}>{health.database}</span></td>
+                    </tr>
+                    <tr>
+                      <th>DEVICE_KEY set</th>
+                      <td><span className={`chip ${health.deviceKeyConfigured ? "good" : "bad"}`}>{health.deviceKeyConfigured ? "Yes" : "No"}</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+                {health.contacts?.length > 0 ? (
+                  <div style={{ marginTop: 10 }}>
+                    <div className="note" style={{ fontWeight: 600, marginBottom: 4 }}>Recent pods contacting server:</div>
+                    <ul style={{ margin: 0, paddingLeft: 16, fontSize: 12.5 }}>
+                      {health.contacts.slice(0, 5).map((c: any) => (
+                        <li key={c.deviceId}>
+                          <code>{c.deviceId}</code> (fw {c.fw || "?"}) —{" "}
+                          <span className={`chip ${c.result === "ok" ? "good" : "bad"}`}>{c.result}</span>{" "}
+                          <span>{c.secondsAgo}s ago</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p className="note" style={{ marginTop: 8 }}>No hardware pods have contacted this server instance yet.</p>
+                )}
+              </>
+            ) : (
+              <p className="note">Checking /api/health...</p>
+            )}
+          </section>
+
+          <section className="card">
+            <h2>Pod Quick Reference (v1.4)</h2>
             <table className="kv">
               <tbody>
-                <tr><th>Setup Wi-Fi AP</th><td><code>EcoVital-XXXX</code></td></tr>
-                <tr><th>Captive Portal IP</th><td><code>192.168.4.1</code></td></tr>
-                <tr><th>Local mDNS URL</th><td><code>http://&lt;id&gt;.local/</code></td></tr>
-                <tr><th>OLED Pair Code</th><td>6 chars (e.g. <code>DEMO26</code>)</td></tr>
+                <tr><th>Show Pair Code</th><td>Press <b>BOOT</b> button briefly (shows for 30 s)</td></tr>
+                <tr><th>Setup Wi-Fi AP</th><td><code>EcoVital-XXXX</code> (<code>192.168.4.1</code>)</td></tr>
+                <tr><th>Pod Settings Page</th><td><code>http://&lt;IP on bottom of screen&gt;</code> &gt; Settings</td></tr>
                 <tr><th>DHT22 (Temp/Hum)</th><td>GPIO 4</td></tr>
                 <tr><th>MQ-135 (Air Index)</th><td>GPIO 34 (ADC)</td></tr>
                 <tr><th>GP2Y1010 (Dust)</th><td>GPIO 35 / LED 32</td></tr>
@@ -297,9 +425,6 @@ function AddPodWizardInner() {
                 <tr><th>SSD1306 OLED</th><td>GPIO 21 (SDA), 22 (SCL)</td></tr>
               </tbody>
             </table>
-            <p className="note" style={{ marginTop: 10 }}>
-              <b>USB Serial Commands (115200 baud):</b> <code>help</code>, <code>status</code>, <code>code</code>, <code>test</code>, <code>vol 80</code>, <code>mute</code>, <code>unmute</code>, <code>wifi-reset</code>.
-            </p>
           </section>
         </aside>
       </div>

@@ -121,7 +121,7 @@ export default function NodeView({ id, readOnly = false }: { id: string; readOnl
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || "Save failed");
-      setSaveMsg("Saved! Volume, mute, and profile apply on the pod's next check-in (within 15 s).");
+      setSaveMsg("Saved! Volume and mute reach the pod on its next upload; room profile and name apply in the app immediately.");
       load();
     } catch (e: any) {
       setSaveMsg(`Error: ${e.message}`);
@@ -168,7 +168,10 @@ export default function NodeView({ id, readOnly = false }: { id: string; readOnl
   const anomalies: any[] = data.anomalies ?? [];
   const events: any[] = data.events;
   const lastSpoken = events.find((e) => e.spokenFlag && e.spoken);
-  const stale = dev.lastReadingAt ? now - dev.lastReadingAt > 120_000 : true;
+  const stale = dev.lastReadingAt ? now - dev.lastReadingAt > 60_000 : true;
+  const savedReadingsEst = dev.lastReadingAt
+    ? Math.min(240, Math.max(1, Math.floor(Math.max(0, now - dev.lastReadingAt) / 15_000)))
+    : 0;
   const sys = data.system;
 
   return (
@@ -179,6 +182,9 @@ export default function NodeView({ id, readOnly = false }: { id: string; readOnl
         simulated={dev.simulated}
         online={dev.online && !stale}
         lastAt={dev.lastReadingAt}
+        savedCount={savedReadingsEst}
+        fw={sys?.fw}
+        rssi={sys?.rssi}
         now={now}
         voiceOn={voice.on}
         toggleVoice={voice.toggle}
@@ -189,9 +195,11 @@ export default function NodeView({ id, readOnly = false }: { id: string; readOnl
       {error && <div className="banner">Showing the last data received. Refresh failed: {error}</div>}
       {stale && !dev.simulated && (
         <div className="banner warn">
-          <b>Offline ({dev.lastReadingAt ? `last seen ${ago(now, dev.lastReadingAt)}` : "waiting for first reading"}):</b>{" "}
-          This pod is offline from Wi-Fi, but still giving spoken advice in the room using its 15 built-in offline voice clips.
-          Charts below show the last data received.
+          <b>
+            Offline, {savedReadingsEst} reading{savedReadingsEst === 1 ? "" : "s"} saved on the pod will arrive when it reconnects
+            {dev.lastReadingAt ? ` (last reading ${ago(now, dev.lastReadingAt)})` : " (waiting for first reading)"}:
+          </b>{" "}
+          This pod is offline from Wi-Fi, but still judging readings, forecasting, and speaking its 15 built-in offline alerts in the room.
         </div>
       )}
 
@@ -778,6 +786,9 @@ function Header(props: {
   simulated?: boolean;
   online?: boolean;
   lastAt?: number | null;
+  savedCount?: number;
+  fw?: string | null;
+  rssi?: number | null;
   now?: number;
   voiceOn?: boolean;
   toggleVoice?: () => void;
@@ -792,12 +803,18 @@ function Header(props: {
         {props.location ? ` · ${props.location}` : ""}
       </span>
       {props.simulated && <span className="chip sim">Simulated data</span>}
+      {props.fw && <span className="chip" title="Pod firmware version">FW v{props.fw}</span>}
+      {props.rssi !== undefined && props.rssi !== null && (
+        <span className="chip" title="Wi-Fi signal strength">{props.rssi} dBm</span>
+      )}
       {props.readOnly && <span className="chip">Read-only shared view</span>}
       <span className="spacer" />
       {props.now !== undefined && !props.simulated && (
         <span className="live">
-          <span className={`dot ${props.online ? "good pulse" : "bad"}`} />
-          {props.online ? `Live, updated ${ago(props.now, props.lastAt)}` : "Offline"}
+          <span className={`dot ${props.online ? "good pulse" : "watch"}`} />
+          {props.online
+            ? `Online (${ago(props.now, props.lastAt)})`
+            : `Offline, ${props.savedCount ?? 0} readings saved on the pod will arrive when it reconnects`}
         </span>
       )}
       {props.podId && !props.readOnly && (

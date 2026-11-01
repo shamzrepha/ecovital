@@ -9,7 +9,14 @@ import { runScenario, DEMO_ID, seedGlobal } from "../lib/demo.ts";
 import { getNodeDetail, getNodes } from "../lib/queries.ts";
 import { db } from "../lib/db.ts";
 import { ingest } from "../lib/ingest.ts";
-import { claimPodByCode, unclaimPod, updatePodSettings, createFirmwareRelease } from "../lib/pods.ts";
+import {
+  claimPodByCode,
+  unclaimPod,
+  updatePodSettings,
+  createFirmwareRelease,
+  verifyPodIngestKey,
+  uploadFirmwareBlob,
+} from "../lib/pods.ts";
 import { answerPodQuestion, runAiEvaluationSuite } from "../lib/ai.ts";
 import { generateAiPredictions } from "../lib/ai-predict.ts";
 
@@ -173,5 +180,110 @@ test("Ask EcoVital honesty guard & 20-scenario AI evaluation suite", async () =>
   assert.equal(pred.whatIfs.length, 4, "Must provide 4 What-If intervention scenarios");
   assert.ok(pred.spokenForecast.length > 20, "Must provide a spoken AI forecast line");
 });
+
+test("bad-key contact recorded", async () => {
+  process.env.DEVICE_KEY = "evk_6450a3caa5e01e24638ef4e6";
+  const auth = await verifyPodIngestKey({
+    deviceId: "pod-badkey-1",
+    providedKey: "wrong_key_123",
+    claim: "BADK26",
+    fw: "1.4",
+  });
+  assert.equal(auth.authorized, false);
+  assert.equal(auth.status, 401);
+
+  const sql = await db();
+  const rows = await sql`SELECT device_id, claim, result, fw FROM pod_contact WHERE device_id = 'pod-badkey-1'`;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].claim, "BADK26");
+  assert.equal(rows[0].result, "bad-key");
+  assert.equal(rows[0].fw, "1.4");
+});
+
+test("claim explains bad-key", async () => {
+  const res = await claimPodByCode({
+    code: "BADK26",
+    userId: "user-checking-badkey",
+  });
+  assert.equal(res.ok, false);
+  assert.ok(res.error);
+  assert.match(res.error!, /reaching the server, but the server rejected its key/i);
+  assert.match(res.error!, /pod-badkey-1/);
+});
+
+test("shared key rejected after token confirmation", async () => {
+  process.env.DEVICE_KEY = "evk_6450a3caa5e01e24638ef4e6";
+  // 1. Pod connects with valid shared key and registers its claim code
+  const auth1 = await verifyPodIngestKey({
+    deviceId: "pod-tok-1",
+    providedKey: "evk_6450a3caa5e01e24638ef4e6",
+    claim: "TOKN26",
+    fw: "1.4",
+  });
+  assert.equal(auth1.authorized, true);
+  await ingest(
+    { id: "pod-tok-1", name: "Token Test Pod", meta: { fw: "1.4", claim: "TOKN26" } },
+    [{ ageMs: 0, dust: 10, air: 90, temp: 26, hum: 48 }],
+  );
+
+  // 2. Owner claims the pod -> receives private deviceToken
+  const cRes = await claimPodByCode({ code: "TOKN26", userId: "token-owner" });
+  assert.equal(cRes.ok, true);
+  assert.ok(cRes.deviceToken);
+
+  // 3. Before token confirmation, shared key still works (so pod can receive the token)
+  const authBeforeConfirm = await verifyPodIngestKey({
+    deviceId: "pod-tok-1",
+    providedKey: "evk_6450a3caa5e01e24638ef4e6",
+    claim: "TOKN26",
+    fw: "1.4",
+  });
+  assert.equal(authBeforeConfirm.authorized, true);
+
+  // 4. Pod authenticates once with its private deviceToken -> marks token_delivered = true
+  const authWithToken = await verifyPodIngestKey({
+    deviceId: "pod-tok-1",
+    providedKey: cRes.deviceToken!,
+    claim: "TOKN26",
+    fw: "1.4",
+  });
+  assert.equal(authWithToken.authorized, true);
+
+  // 5. Now the shared DEVICE_KEY is rejected for that pod
+  const authSharedAfter = await verifyPodIngestKey({
+    deviceId: "pod-tok-1",
+    providedKey: "evk_6450a3caa5e01e24638ef4e6",
+    claim: "TOKN26",
+    fw: "1.4",
+  });
+  assert.equal(authSharedAfter.authorized, false);
+  assert.equal(authSharedAfter.status, 401);
+});
+
+test("firmware upload rejects a file that does not start with 0xE9", async () => {
+  const badBuf = Buffer.alloc(150_000, 0x00);
+  badBuf[0] = 0x50; // 'P' (e.g. a ZIP archive instead of an ESP32 .ino.bin)
+  const badRes = await uploadFirmwareBlob({
+    version: "1.4",
+    buf: badBuf,
+    origin: "https://ecovital-phi.vercel.app",
+  });
+  assert.equal(badRes.ok, false);
+  assert.equal(badRes.status, 400);
+  assert.match(badRes.error ?? "", /0xE9/);
+
+  const goodBuf = Buffer.alloc(150_000, 0x00);
+  goodBuf[0] = 0xe9; // ESP32 magic byte
+  const goodRes = await uploadFirmwareBlob({
+    version: "1.4",
+    buf: goodBuf,
+    origin: "https://ecovital-phi.vercel.app",
+    notes: "ESP32 v1.4 image",
+  });
+  assert.equal(goodRes.ok, true);
+  assert.equal(goodRes.status, 200);
+  assert.equal(goodRes.version, "1.4");
+});
+
 
 
