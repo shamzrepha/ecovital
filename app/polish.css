@@ -1,0 +1,108 @@
+/* Final visual polish. Styles only: no markup or behaviour depends on anything in here. Loaded after globals.css and site.css. */
+
+/* ---------- Page chrome ---------- */
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body { padding-bottom: 32px; }
+::selection { background: color-mix(in srgb, var(--brand-leaf) 35%, transparent); }
+
+/* The pod page repeats the app bar's brand; the app bar is enough. */
+.top a.brand { display: none; }
+.top .crumb:first-child { margin-left: 0; }
+
+/* ---------- Loading state: a soft shimmer instead of plain text ---------- */
+.skeleton {
+  position: relative;
+  min-height: 132px;
+  border-radius: 14px;
+  border: 1px solid var(--rule);
+  background:
+    linear-gradient(100deg, transparent 30%, color-mix(in srgb, var(--brand-leaf) 10%, transparent) 50%, transparent 70%) 0 0 / 220% 100% no-repeat,
+    var(--panel);
+  color: var(--ink2);
+  display: grid;
+  place-items: center;
+  animation: ev-shimmer 1.6s ease-in-out infinite;
+}
+@keyframes ev-shimmer { from { background-position: 130% 0, 0 0; } to { background-position: -30% 0, 0 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+
+/* ---------- Pod cards ---------- */
+.pod-card { transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s; }
+.pod-card:hover { border-color: var(--brand-leaf); transform: translateY(-1px); }
+.pod-card:active { transform: none; }
+
+/* ---------- Cards and chips breathe a little more ---------- */
+.card, .lp-card, .auth-card { box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 6%, transparent); }
+.chip { line-height: 1.5; }
+.btn { transition: background 0.15s, border-color 0.15s, transform 0.1s; }
+.btn:active:not(:disabled) { transform: translateY(1px); }
+
+/* ---------- Tablet ---------- */
+@media (max-width: 1000px) {
+  .wrap { padding-left: 14px; padding-right: 14px; }
+  .grid-2 { grid-template-columns: 1fr; }
+}
+
+/* ---------- Phone ---------- */
+@media (max-width: 780px) {
+  body { padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)); font-size: 15px; }
+
+  .app-topbar-inner { padding: 8px 12px; gap: 8px; }
+  .brand-link span { font-size: 17px; }
+  .who { display: none; }
+
+  /* Pods as a swipeable strip instead of a tall stack, so the selected room stays near the top. */
+  .pod-cards {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    margin: 0 -14px 14px;
+    padding: 2px 14px 8px;
+    scroll-snap-type: x mandatory;
+    scroll-padding-left: 14px;
+    scrollbar-width: none;
+  }
+  .pod-cards::-webkit-scrollbar { display: none; }
+  .pod-card { flex: 0 0 min(76%, 270px); scroll-snap-align: start; padding: 12px; }
+
+  /* Comfortable touch targets, and no iOS zoom when a field is focused. */
+  .btn { min-height: 40px; }
+  .btn.small { min-height: 36px; padding: 6px 12px; }
+  .input, .select, input, select, textarea { font-size: 16px; }
+  .code-input { font-size: 26px; letter-spacing: 0.28em; }
+
+  /* The main action row becomes tidy two-up tiles. */
+  .room-hero .btn.primary.small { flex: 1 1 100%; justify-content: center; }
+  .top { gap: 8px; padding: 14px 0 10px; }
+  .top .spacer { display: none; }
+  .top .btn.primary { margin-left: auto; }
+
+  .wizard .card { padding: 16px; }
+  .wizard-actions .btn { flex: 1 1 auto; justify-content: center; }
+
+  .lp-hero { padding: 36px 0 32px; }
+  .lp-section { padding: 36px 0; }
+  .lp-btn { flex: 1 1 100%; justify-content: center; }
+  .lp-lead { font-size: 16px; }
+
+  .bottom-tabs { padding-left: 6px; padding-right: 6px; box-shadow: 0 -6px 18px color-mix(in srgb, var(--ink) 10%, transparent); }
+  .bottom-tab { flex: 1; min-width: 0; padding: 6px 4px; font-size: 11px; }
+  .bottom-tab.active { color: var(--brand-deep); font-weight: 700; }
+  html[data-theme="dark"] .bottom-tab.active { color: var(--brand-lime); }
+}
+@media (max-width: 780px) and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .bottom-tab.active { color: var(--brand-lime); }
+}
+
+/* Small phones */
+@media (max-width: 400px) {
+  .lp-hero h1 { font-size: 28px; }
+  .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .auth-card { padding: 18px; }
+}
+
+/* Large desktops: a little more room around the content. */
+@media (min-width: 1280px) {
+  .wrap { padding-left: 24px; padding-right: 24px; }
+}
