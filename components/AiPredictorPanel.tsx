@@ -145,78 +145,80 @@ export default function AiPredictorPanel({ podId, onSpeak }: Props) {
           <h3 style={{ fontSize: 14, marginBottom: 6 }}>
             Multi-Horizon Sensor &amp; Room Score Forecast
           </h3>
-          <table className="kv">
-            <thead>
-              <tr>
-                <th>Metric</th>
-                <td>Now (Measured)</td>
-                <td>+10 min</td>
-                <td>+30 min</td>
-                <td>+60 min</td>
-                <td>Trend</td>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <th>Room Score</th>
-                <td>
-                  <b>{pred.horizons?.[0]?.roomScore ?? "--"}/100</b>
-                </td>
-                <td>
-                  <b>{pred.horizons?.[0]?.roomScore ?? "--"}</b> ({pred.horizons?.[0]?.scoreWord})
-                </td>
-                <td>
-                  <b>{pred.horizons?.[1]?.roomScore ?? "--"}</b> ({pred.horizons?.[1]?.scoreWord})
-                </td>
-                <td>
-                  <b>{pred.horizons?.[2]?.roomScore ?? "--"}</b> ({pred.horizons?.[2]?.scoreWord})
-                </td>
-                <td>
-                  <span className="tag-estimated">Estimated</span>
-                </td>
-              </tr>
-              {METRIC_KEYS.map((k: MetricKey) => {
-                const m = pred.metrics?.[k];
-                if (!m) return null;
-                return (
-                  <tr key={k}>
-                    <th>{m.label}</th>
-                    <td>
-                      {m.current}
-                      {m.unit}
-                    </td>
-                    <td>
-                      <b>
-                        {m.pred10m}
+          <div className="table-wrap">
+            <table className="kv">
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <td>Now (Measured)</td>
+                  <td>+10 min</td>
+                  <td>+30 min</td>
+                  <td>+60 min</td>
+                  <td>Trend</td>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th>Room Score</th>
+                  <td>
+                    <b>{pred.horizons?.[0]?.roomScore ?? "--"}/100</b>
+                  </td>
+                  <td>
+                    <b>{pred.horizons?.[0]?.roomScore ?? "--"}</b> ({pred.horizons?.[0]?.scoreWord})
+                  </td>
+                  <td>
+                    <b>{pred.horizons?.[1]?.roomScore ?? "--"}</b> ({pred.horizons?.[1]?.scoreWord})
+                  </td>
+                  <td>
+                    <b>{pred.horizons?.[2]?.roomScore ?? "--"}</b> ({pred.horizons?.[2]?.scoreWord})
+                  </td>
+                  <td>
+                    <span className="tag-estimated">Estimated</span>
+                  </td>
+                </tr>
+                {METRIC_KEYS.map((k: MetricKey) => {
+                  const m = pred.metrics?.[k];
+                  if (!m) return null;
+                  return (
+                    <tr key={k}>
+                      <th>{m.label}</th>
+                      <td>
+                        {m.current}
                         {m.unit}
-                      </b>
-                    </td>
-                    <td>
-                      {m.pred30m}
-                      {m.unit}
-                    </td>
-                    <td>
-                      {m.pred60m}
-                      {m.unit}
-                    </td>
-                    <td>
-                      {m.crossing ? (
-                        <span className="chip bad">
-                          Crosses {m.crossing.threshold}
-                          {m.unit} in ~{m.crossing.inMinutes}m
-                        </span>
-                      ) : (
-                        <span className="note">
-                          {m.trend} ({m.slopePerMin >= 0 ? "+" : ""}
-                          {m.slopePerMin}/m)
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                      </td>
+                      <td>
+                        <b>
+                          {m.pred10m}
+                          {m.unit}
+                        </b>
+                      </td>
+                      <td>
+                        {m.pred30m}
+                        {m.unit}
+                      </td>
+                      <td>
+                        {m.pred60m}
+                        {m.unit}
+                      </td>
+                      <td>
+                        {m.crossing ? (
+                          <span className="chip bad">
+                            Crosses {m.crossing.threshold}
+                            {m.unit} in ~{m.crossing.inMinutes}m
+                          </span>
+                        ) : (
+                          <span className="note">
+                            {m.trend} ({m.slopePerMin >= 0 ? "+" : ""}
+                            {m.slopePerMin}/m)
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         {/* Interactive "What-If" Intervention Simulator */}
@@ -240,25 +242,14 @@ export default function AiPredictorPanel({ podId, onSpeak }: Props) {
 
           {activeWhatIf && (
             <div className="sensor-tile">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
                 <b>{activeWhatIf.label}</b>
                 <span className="tag-estimated">Simulated outcome</span>
               </div>
               <p className="note" style={{ margin: "4px 0 8px" }}>
                 {activeWhatIf.description}
               </p>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
-                  gap: 6,
-                  textAlign: "center",
-                  background: "var(--panel)",
-                  padding: 8,
-                  borderRadius: 8,
-                  border: "1px solid var(--rule)",
-                }}
-              >
+              <div className="whatif-grid">
                 <div>
                   <div className="note">Score (30m)</div>
                   <b style={{ fontSize: 17, color: "var(--brand-leaf)" }}>{activeWhatIf.in30m.roomScore}/100</b>

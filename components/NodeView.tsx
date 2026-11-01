@@ -219,10 +219,10 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
       {/* Room Score & What the pod just said */}
       <div className="grid-2" style={{ alignItems: "stretch", marginBottom: 18 }}>
         {rs && (
-          <div className="card" style={{ marginBottom: 0, display: "flex", gap: 16, alignItems: "center" }}>
+          <div className="card score-card" style={{ marginBottom: 0 }}>
             <div
               className={`score-ring ${rs.level === "poor" ? "poor" : rs.level === "fair" ? "fair" : ""}`}
-              style={{ width: 108, height: 108, flexShrink: 0 }}
+              style={{ width: 108, height: 108, flexShrink: 0, margin: 0 }}
             >
               <span className="score-num" style={{ fontSize: 32 }}>{rs.score}</span>
               <span className="score-word" style={{ fontSize: 11.5 }}>{rs.word}</span>
@@ -577,36 +577,38 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                   <p className="note">
                     These 15 clips are stored in the ESP32 flash memory at 12 kHz 8-bit mu-law mono so the pod keeps speaking even when Wi-Fi and power grids fail. Click any clip to decode and play it in your browser.
                   </p>
-                  <table className="kv">
-                    <thead>
-                      <tr>
-                        <th>Clip</th>
-                        <th>Trigger Condition</th>
-                        <th>Spoken Transcript</th>
-                        <td>Preview</td>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {OFFLINE_CLIPS.map((c) => (
-                        <tr key={c.id}>
-                          <th>#{c.id}</th>
-                          <td style={{ textAlign: "left", paddingRight: 10 }}>
-                            <span className="chip">{c.title}: {c.when}</span>
-                          </td>
-                          <td style={{ textAlign: "left" }}>&ldquo;{c.transcript}&rdquo;</td>
-                          <td>
-                            <button
-                              className="btn small"
-                              disabled={playingClip === c.id}
-                              onClick={() => playOfflineClip(c.id)}
-                            >
-                              {playingClip === c.id ? "Playing..." : "▶ Play"}
-                            </button>
-                          </td>
+                  <div className="table-wrap">
+                    <table className="kv">
+                      <thead>
+                        <tr>
+                          <th>Clip</th>
+                          <th>Trigger Condition</th>
+                          <th>Spoken Transcript</th>
+                          <td>Preview</td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {OFFLINE_CLIPS.map((c) => (
+                          <tr key={c.id}>
+                            <th>#{c.id}</th>
+                            <td style={{ textAlign: "left", paddingRight: 10 }}>
+                              <span className="chip">{c.title}: {c.when}</span>
+                            </td>
+                            <td style={{ textAlign: "left" }}>&ldquo;{c.transcript}&rdquo;</td>
+                            <td>
+                              <button
+                                className="btn small"
+                                disabled={playingClip === c.id}
+                                onClick={() => playOfflineClip(c.id)}
+                              >
+                                {playingClip === c.id ? "Playing..." : "▶ Play"}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
 
@@ -616,32 +618,34 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                   <p className="note">
                     Every alert picks one concrete action. Features requiring a fan relay, CO₂ sensor, or calibrated PM2.5 sensor are honestly marked below.
                   </p>
-                  <table className="kv">
-                    <thead>
-                      <tr>
-                        <th>Condition</th>
-                        <th>Recommended Action</th>
-                        <td>Hardware Status</td>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {ACTION_LIBRARY.map((a) => (
-                        <tr key={a.id}>
-                          <th>{a.condition}</th>
-                          <td style={{ textAlign: "left" }}>{a.advice}</td>
-                          <td>
-                            {a.needsHardware ? (
-                              <span className="tag-hardware" title={a.hardwareNote}>
-                                Needs extra hardware ({a.hardwareNote})
-                              </span>
-                            ) : (
-                              <span className="tag-measured">Included on pod v1.1</span>
-                            )}
-                          </td>
+                  <div className="table-wrap">
+                    <table className="kv">
+                      <thead>
+                        <tr>
+                          <th>Condition</th>
+                          <th>Recommended Action</th>
+                          <td>Hardware Status</td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {ACTION_LIBRARY.map((a) => (
+                          <tr key={a.id}>
+                            <th>{a.condition}</th>
+                            <td style={{ textAlign: "left" }}>{a.advice}</td>
+                            <td>
+                              {a.needsHardware ? (
+                                <span className="tag-hardware" title={a.hardwareNote}>
+                                  Needs extra hardware ({a.hardwareNote})
+                                </span>
+                              ) : (
+                                <span className="tag-measured">Included on pod v1.1</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </section>
