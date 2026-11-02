@@ -57,11 +57,11 @@
 #define DEFAULT_SSID  "YOUR_WIFI_NAME"
 #define DEFAULT_PASS  "YOUR_WIFI_PASSWORD"// 
 #define DEFAULT_BASE  "https://ecovital-phi.vercel.app"   // no trailing slash
-#define DEFAULT_KEY   ""    // no key is baked in: the pod enrolls itself and the cloud gives it a private token
+#define DEFAULT_KEY   "evk_6450a3caa5e01e24638ef4e6"
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "2.0"
+#define FW_VERSION "2.3"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -73,6 +73,13 @@ char macStr[18]     = "00:00:00:00:00:00";
 char apName[20]     = "EcoVital-0000";
 volatile float spkVol = 1.0f;                             // 0.0 - 1.0, set from the app
 volatile bool  muted  = false;
+volatile bool restartReq = false;       // set by app restart command
+volatile bool sosRequest = false;       // app SOS alarm
+volatile bool sosActive = false;        // visual SOS screen flag
+uint32_t sosStarted = 0;
+bool wasSos = false;
+uint32_t wifiDrops = 0;
+
 #define WIFI_SSID   cfgSsid.c_str()
 #define WIFI_PASS   cfgPass.c_str()
 #define API_BASE    cfgBase.c_str()
@@ -84,7 +91,7 @@ volatile bool  muted  = false;
 #define SPEAKER_VOLUME (spkVol * OUT_HEADROOM)    // loudness of beeps and AI voice, set from the app
 #define CLIP_VOLUME (spkVol * OUT_HEADROOM)
 #define WELCOME_VOLUME (spkVol * OUT_HEADROOM)
-#define UPLOAD_EVERY_MS 5000     // how often readings are sent (matches the 5 s sample rate, so the app is near real time)
+#define UPLOAD_EVERY_MS 15000    // how often readings are sent
 #define SAMPLE_EVERY_MS 5000     // how often a reading is recorded
 // =====================================================================
 
@@ -201,11 +208,10 @@ int ringCount() { return rCount; }
 // ---------- NETWORK STATE (shown in the header) ----------
 volatile uint8_t netState = 0;          // 0 no Wi-Fi, 1 Wi-Fi but not uploading, 2 uploading OK
 volatile bool speaking = false;
+unsigned long audioQuietUntil = 0;   // sensors are ignored while the speaker plays (its current makes the readings jump)
 volatile uint32_t lastOkMs = 0;
 volatile int lastEventId = 0;
 volatile bool replayRequested = false;
-volatile bool restartReq = false;       // set by an app command
-volatile uint32_t wifiDrops = 0;       // how many times Wi-Fi was lost since power-up
 
 // ---------- RING GEOMETRY ----------
 #define RING_BOX 40
@@ -465,25 +471,18 @@ void updateHeader(unsigned long now) {
   tft.drawRGBBitmap(0, 0, headerCanvas.getBuffer(), 160, 15);
 }
 
-extern bool apActive;
-String lastIpStr = "";
-void drawFooter() {                                 // bottom line: pairing code when online, an IP address when not, and readings saved for later
+void drawFooter() {                                 // bottom line: IP address, or "Disconnected", and readings saved for later
   bool on = WiFi.status() == WL_CONNECTED;
-  if (on) lastIpStr = WiFi.localIP().toString();
-  String shown;
-  if (on) shown = String("Code ") + String(claimCode);                           // sealed pods cannot press BOOT, so the pairing code is always visible
-  else if (apActive) shown = WiFi.softAPIP().toString();                         // setup mode: the address to open on your phone
-  else if (lastIpStr.length()) shown = lastIpStr;                                // reconnecting: the last address it had
-  else shown = "Disconnected";
+  String key = on ? WiFi.localIP().toString() : String("-");
   int saved = (netState != 2) ? ringCount() : 0;
-  String key = shown + (on ? "|1|" : "|0|") + String(saved);
+  key += "|"; key += saved;
   if (key == lastFooter) return;
   lastFooter = key;
   tft.fillRect(0, 118, 160, 10, COL_BG);
   tft.setTextSize(1);
   tft.setCursor(5, 120);
-  tft.setTextColor(on ? COL_SUBTEXT : COL_CORAL);
-  tft.print(shown);
+  if (on) { tft.setTextColor(COL_SUBTEXT); tft.print("IP "); tft.print(WiFi.localIP().toString()); }
+  else    { tft.setTextColor(COL_CORAL);   tft.print("Disconnected"); }
   if (saved > 0) {
     char b[16];
     snprintf(b, sizeof(b), "saved %d", saved);
@@ -546,8 +545,8 @@ bool i2sStart() {
   if (muted) return false;
   i2s_chan_config_t cc = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
   cc.auto_clear = true;
-  cc.dma_desc_num = 12;               // about 180 ms of audio queued, so a short Wi-Fi stall does not crackle
-  cc.dma_frame_num = 360;
+  cc.dma_desc_num = 8;
+  cc.dma_frame_num = 256;
   if (i2s_new_channel(&cc, &txChan, NULL) != ESP_OK) { txChan = NULL; return false; }
   i2s_std_config_t sc = {};
   sc.clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(SPEECH_RATE);
@@ -586,8 +585,8 @@ bool i2sStart() {
   cfg.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;     // same sample to both channels
   cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   cfg.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
-  cfg.dma_buf_count = 12;
-  cfg.dma_buf_len = 360;
+  cfg.dma_buf_count = 8;
+  cfg.dma_buf_len = 256;
   cfg.use_apll = false;
   cfg.tx_desc_auto_clear = true;
   if (i2s_driver_install(I2S_NUM_0, &cfg, 0, NULL) != ESP_OK) return false;
@@ -658,6 +657,29 @@ void playToneVol(float freq, int ms, float vol) {
 
 void playTone(float freq, int ms) { playToneVol(freq, ms, SPEAKER_VOLUME); }
 
+void playSos() {                                 // loud emergency siren, sounds even when muted or low volume
+  if (!i2sStart()) { Serial.println("[sos] I2S start failed"); return; }
+  speaking = true;
+  int16_t z[256 * 2] = {0};
+  i2sWrite(z, sizeof(z));
+  float vol = (spkVol < 0.7f ? 0.7f : spkVol) * OUT_HEADROOM;
+  for (int i = 0; i < 6; i++) { playToneVol(1000, 280, vol); playToneVol(700, 280, vol); }
+  i2sWrite(z, sizeof(z));
+  speaking = false;
+  i2sStop();
+}
+
+void playSiren() {                               // loud two-tone siren (still silent if the pod is muted)
+  if (!i2sStart()) return;
+  speaking = true;
+  int16_t z[256 * 2] = {0};
+  i2sWrite(z, sizeof(z));
+  for (int k = 0; k < 8; k++) { playToneVol(960, 230, 0.8f); playToneVol(1400, 230, 0.8f); }
+  i2sWrite(z, sizeof(z));
+  speaking = false;
+  i2sStop();
+}
+
 void beepPattern(int count) {
   if (!i2sStart()) return;
   speaking = true;
@@ -678,7 +700,6 @@ bool playSpeech(int eventId) {
   if (https) { sec.setInsecure(); http.begin(sec, url); }   // see README: add the Vercel root CA to verify the server
   else http.begin(plain, url);
   http.useHTTP10(true);                // plain Content-Length body, no chunked encoding
-  http.addHeader("X-Device-Key", cfgTok.length() ? cfgTok.c_str() : DEVICE_KEY);   // the speech is private to this pod's owner
   http.setTimeout(20000);
   int code = http.GET();
   if (code != 200) {
@@ -688,45 +709,18 @@ bool playSpeech(int eventId) {
     return false;
   }
 
-  WiFiClient* stream = http.getStreamPtr();
-  int remaining = http.getSize();      // -1 if unknown
-  uint8_t buf[1024];
-  uint32_t lastData = millis();
-  size_t total = 0;
-
-  // Fill about 0.7 s of speech into memory BEFORE the speaker starts. Starting on the first packet makes the
-  // speaker run out of audio whenever Wi-Fi hiccups, which is the crackle.
-  const size_t PRE = 32768;
-  uint8_t* pre = (uint8_t*)malloc(PRE);
-  size_t preLen = 0;
-  while (pre && preLen < PRE && remaining != 0) {
-    size_t avail = stream->available();
-    if (!avail) {
-      if (!stream->connected()) break;
-      if (millis() - lastData > 6000) break;
-      delay(2);
-      continue;
-    }
-    size_t room = PRE - preLen;
-    int n = stream->readBytes(pre + preLen, avail < room ? avail : room);
-    if (n <= 0) continue;
-    lastData = millis();
-    if (remaining > 0) remaining -= n;
-    preLen += n;
-  }
-
-  if (!i2sStart()) { Serial.println("[voice] I2S start failed"); if (pre) free(pre); http.end(); return false; }
+  if (!i2sStart()) { Serial.println("[voice] I2S start failed"); http.end(); return false; }
   speaking = true;
   carryByte = -1;
 
   // 80 ms of silence first so the amplifier wakes up without a pop
   { int16_t z[256 * 2] = {0}; i2sWrite(z, sizeof(z)); }
 
-  if (pre) {
-    if (preLen) { writePcm(pre, preLen); total += preLen; }
-    free(pre);
-  }
-  lastData = millis();
+  WiFiClient* stream = http.getStreamPtr();
+  int remaining = http.getSize();      // -1 if unknown
+  uint8_t buf[1024];
+  uint32_t lastData = millis();
+  size_t total = 0;
   while (remaining != 0) {
     size_t avail = stream->available();
     if (!avail) {
@@ -760,7 +754,7 @@ int testClip = 0;
 enum { ST_OK = 0, ST_WATCH_H = 1, ST_BAD_H = 2, ST_WATCH_L = 3, ST_BAD_L = 4 };
 struct Lim { float wH, bH, wL, bL, hyst; };
 //                       watchHigh badHigh watchLow badLow  hysteresis
-static Lim LIM[4] = { {35,  65,  NAN, NAN, 3.0f},    // 0 dust
+static const Lim LIM[4] = { {35,  65,  NAN, NAN, 3.0f},    // 0 dust
                             {NAN, NAN, 70,  45,  3.0f},    // 1 air index (low is bad)
                             {30,  36,  16,  NAN, 0.5f},    // 2 temperature
                             {68,  82,  30,  NAN, 2.0f} };  // 3 humidity
@@ -787,6 +781,15 @@ uint32_t adviceAt = 0;
 const char* rapidMsg = nullptr;
 uint32_t rapidMsgAt = 0;
 
+// ----- gas / fumes alarm: a fast drop of the air index (MQ135 reacts to many gases and fumes, but it cannot say which) -----
+#define GAS_DROP_POINTS 15.0f    // alarm when the air index falls this far below its slow baseline...
+#define GAS_LOW_LEVEL   40.0f    // ...or goes under this level, for at least 1 second
+bool gasAlarm = false, wasGas = false, gasTrig = false;
+float airRef = NAN;                              // slow baseline of the air index
+uint32_t gasWarmAt = 0, gasLowSince = 0, gasClearSince = 0, gasStarted = 0, gasLastSound = 0, gasTestUntil = 0;
+volatile int sirenRequest = 0;
+volatile bool uploadNow = false;
+
 uint8_t classifyLocal(int m, float v, uint8_t prev) {
   const Lim& L = LIM[m];
   if (!isnan(L.bH) && (v >= L.bH || (prev == ST_BAD_H && v > L.bH - L.hyst))) return ST_BAD_H;
@@ -807,6 +810,7 @@ int clipFor(int m, uint8_t st) {
 }
 
 void queueClip(int id, int prio, uint32_t now) {
+  if (gasAlarm && id == CLIP_AIR_BAD) return;     // the siren already says this
   if (pendingClip < 0 || prio > pendingPrio) { pendingClip = id; pendingPrio = prio; pendingAt = now; }
 }
 
@@ -824,8 +828,7 @@ void localAlertStep(uint32_t now) {            // called once per recorded readi
     uint8_t cand = classifyLocal(m, v[m], locStatus[m]);
     if (cand == locStatus[m]) { candStatus[m] = cand; continue; }
     if (cand != candStatus[m]) { candStatus[m] = cand; candSince[m] = now; continue; }
-    // must hold before it counts: 5 s (two readings) for a bad state, 10 s for a watch state
-    if (now - candSince[m] < (sevOf(cand) == 2 ? 5000u : 10000u)) continue;
+    if (now - candSince[m] < 10000) continue;   // must hold for 10 s before it counts
     uint8_t old = locStatus[m];
     locStatus[m] = cand;
     if (sevOf(cand) > sevOf(old)) {             // got worse: say what to do
@@ -909,6 +912,7 @@ const char* adviceFor(int m, uint8_t st) {
 }
 
 void refreshAdvice(uint32_t now) {
+  if (gasAlarm) { setAdvice("Possible gas or fumes. Open the windows, put out any flame and leave the room if you smell gas.", 2); return; }
   int bestM = -1, bestSev = 0;
   for (int m = 0; m < 4; m++) { int sv = sevOf(locStatus[m]); if (sv > bestSev) { bestSev = sv; bestM = m; } }
   if (bestM >= 0) { setAdvice(adviceFor(bestM, locStatus[bestM]), bestSev == 2 ? 2 : 1); return; }
@@ -926,12 +930,74 @@ void refreshAdvice(uint32_t now) {
   setAdvice("All readings are within healthy limits.", 0);
 }
 
+void gasStep(uint32_t now, float air) {
+  if (isnan(air)) return;
+  bool test = gasTestUntil && (int32_t)(gasTestUntil - now) > 0;
+  if (isnan(airRef)) { airRef = air; gasWarmAt = now; }
+  if (!test && now - gasWarmAt < 20000) { airRef += 0.2f * (air - airRef); return; }   // let the sensor settle after warm-up
+  bool bad = test || air < GAS_LOW_LEVEL || air <= airRef - GAS_DROP_POINTS;
+  if (!gasAlarm) {
+    if (bad) {
+      if (!gasLowSince) gasLowSince = now ? now : 1;
+      if (now - gasLowSince >= (test ? 0 : 1000)) {
+        gasAlarm = true; gasStarted = now; gasLastSound = 0; gasClearSince = 0; gasTrig = true; uploadNow = true;
+        Serial.printf("[ALARM] possible gas or fumes: air index %.0f (baseline %.0f)\n", air, airRef);
+      }
+    } else {
+      gasLowSince = 0;
+      airRef += 0.01f * (air - airRef);          // follow slow changes only
+    }
+  } else {
+    bool ok = !test && air >= GAS_LOW_LEVEL + 10 && air >= airRef - 6.0f;
+    if (ok) { if (!gasClearSince) gasClearSince = now ? now : 1; } else gasClearSince = 0;
+    bool timeout = now - gasStarted > 300000UL;  // never stay in alarm forever if the room really changed
+    if ((gasClearSince && now - gasClearSince >= 10000) || timeout) {
+      gasAlarm = false; gasLowSince = 0; uploadNow = true;
+      if (timeout) airRef = air;
+      Serial.println("[ALARM] cleared");
+      queueClip(CLIP_ALL_GOOD, 90, now);
+    }
+  }
+}
+
+void drawSosScreen(uint32_t now) {
+  static int lastPhase = -1;
+  int phase = (now / 350) & 1;
+  if (phase == lastPhase) return;
+  lastPhase = phase;
+  tft.fillScreen(phase ? 0xF800 : 0x0000);  // flashing Red and Black
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setTextSize(3);
+  tft.setCursor(55, 14);  tft.print("SOS");
+  tft.setTextSize(1);
+  tft.setCursor(20, 50);  tft.print("EMERGENCY ALARM");
+  tft.setCursor(14, 68);  tft.print("Triggered from EcoVital app");
+  tft.setCursor(18, 90);  tft.print("Check room and occupants");
+  tft.setCursor(24, 110); tft.print("Press BOOT to clear");
+}
+
+void drawGasScreen(uint32_t now) {
+  static int lastPhase = -1;
+  int phase = (now / 400) & 1;
+  if (phase == lastPhase) return;
+  lastPhase = phase;
+  tft.fillScreen(phase ? 0xF800 : 0x8000);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setTextSize(2);
+  tft.setCursor(22, 8);   tft.print("WARNING");
+  tft.setTextSize(1);
+  tft.setCursor(20, 34);  tft.print("Possible gas or fumes");
+  tft.setCursor(20, 54);  tft.print("1. Open the windows");
+  tft.setCursor(20, 68);  tft.print("2. Put out any flame");
+  tft.setCursor(20, 82);  tft.print("3. Leave if you smell gas");
+  tft.setCursor(20, 106); tft.printf("Air index %d%%", (int)(isnan(curAir) ? 0 : curAir));
+}
+
 void servicePending(uint32_t now) {             // called every loop
   if (pendingClip < 0 || speaking || clipRequest >= 0) return;
   bool online = (netState == 2) && (now - lastOkMs < 40000);
   if (lastCloudSpeakMs > pendingAt) { pendingClip = -1; return; }       // the AI already spoke
-  uint32_t grace = pendingPrio >= 100 ? 12000 : 25000;                   // wait for the cloud voice, but not long when it is bad
-  if (!online || now - pendingAt >= grace) {
+  if (!online || now - pendingAt >= 35000) {
     Serial.printf("[alert] speaking offline advice (clip %d)\n", pendingClip);
     clipRequest = pendingClip;
     pendingClip = -1;
@@ -972,21 +1038,9 @@ void playClip(int id) {
   i2sStop();
 }
 
-volatile bool sosRequest = false;
-void playSos() {                                 // loud two-tone siren, even when muted or turned down low
-  if (!i2sStart()) { Serial.println("[sos] I2S start failed"); return; }
-  speaking = true;
-  int16_t z[256 * 2] = {0};
-  i2sWrite(z, sizeof(z));
-  float vol = (spkVol < 0.6f ? 0.6f : spkVol) * OUT_HEADROOM;
-  for (int i = 0; i < 6; i++) { playToneVol(1000, 300, vol); playToneVol(700, 300, vol); }
-  i2sWrite(z, sizeof(z));
-  speaking = false;
-  i2sStop();
-}
-
-void serviceAudio() {
-  if (sosRequest) { sosRequest = false; playSos(); }                           // runs on the network core, the only place that touches the speaker after boot
+void serviceAudio() {                           // runs on the network core, the only place that touches the speaker after boot
+  if (sosRequest) { sosRequest = false; playSos(); }
+  if (sirenRequest > 0) { sirenRequest = 0; playSiren(); playClip(CLIP_AIR_BAD); }
   if (clipRequest >= 0) { int c = clipRequest; clipRequest = -1; playClip(c); }
   if (beepRequest > 0)  { int c = beepRequest; beepRequest = 0; beepPattern(c); }
 }
@@ -1033,6 +1087,9 @@ void loadIdentity() {
   cfgBase = prefs.getString("base", DEFAULT_BASE);
   cfgKey  = prefs.getString("key",  DEFAULT_KEY);
   cfgTok  = prefs.getString("tok",  "");
+  // an older setup page could have saved the placeholder address or key: ignore those and use the built-in ones
+  if (cfgBase.indexOf("your-app") >= 0 || !cfgBase.length()) { cfgBase = DEFAULT_BASE; prefs.remove("base"); }
+  if (cfgKey.startsWith("the-same-") || !cfgKey.length()) { cfgKey = DEFAULT_KEY; prefs.remove("key"); }
   while (cfgBase.endsWith("/")) cfgBase.remove(cfgBase.length() - 1);
   if (cfgSsid == "YOUR_WIFI_NAME") cfgSsid = "";
   spkVol = prefs.getUChar("vol", 100) / 100.0f;
@@ -1378,18 +1435,16 @@ void handleExtras(const String& r) {
   }
   bool m = r.indexOf("\"mute\":true") >= 0;
   if (r.indexOf("\"mute\":") >= 0 && m != muted) { muted = m; prefs.putBool("muted", m); }
-  char ver[24], url[220];
-  char tok[64];
   if (r.indexOf("\"cmd\":\"identify\"") >= 0) { beepRequest = 3; infoUntil = millis() + 15000; infoDrawnAt = 0; Serial.println("[cmd] find this pod"); }
   else if (r.indexOf("\"cmd\":\"calibrate\"") >= 0) { calibrateReq = true; beepRequest = 1; Serial.println("[cmd] recalibrate"); }
   else if (r.indexOf("\"cmd\":\"restart\"") >= 0) { restartReq = true; Serial.println("[cmd] restart"); }
-  if (r.indexOf("\"sos\":true") >= 0) { sosRequest = true; Serial.println("[sos] alarm requested from the app"); }
+  if (r.indexOf("\"sos\":true") >= 0) { sosRequest = true; sosActive = true; sosStarted = millis(); Serial.println("[sos] alarm requested from the app"); }
   char nm[40];
-  if (jsonStr(r, "name", nm, sizeof(nm)) && nm[0] && strcmp(nm, deviceName) != 0) {   // the app renamed this pod
+  if (jsonStr(r, "name", nm, sizeof(nm)) && nm[0] && strcmp(nm, deviceName) != 0) {
     strlcpy(deviceName, nm, sizeof(deviceName)); prefs.putString("name", String(deviceName));
   }
   int li = r.indexOf("\"lim\":[");
-  if (li >= 0) {                                  // limits chosen in the app, used for the pod's own offline advice
+  if (li >= 0) {
     const char* p = r.c_str() + li + 7;
     float v[16]; int got = 0;
     while (got < 16 && *p && *p != ']') {
@@ -1399,6 +1454,8 @@ void handleExtras(const String& r) {
     }
     if (got == 16) for (int m = 0; m < 4; m++) { LIM[m].wH = v[m * 4]; LIM[m].bH = v[m * 4 + 1]; LIM[m].wL = v[m * 4 + 2]; LIM[m].bL = v[m * 4 + 3]; }
   }
+  char ver[24], url[220];
+  char tok[64];
   if (jsonStr(r, "deviceToken", tok, sizeof(tok)) && strlen(tok) >= 12 && cfgTok != tok) {   // the cloud gave this pod its own private key
     cfgTok = tok; prefs.putString("tok", cfgTok);
     Serial.println("[net] received this pod's private cloud token");
@@ -1514,7 +1571,8 @@ void handleButton(uint32_t now) {          // short press: show pairing screen. 
   else if (!pressed && down) {
     down = false;
     if (!longDone && now - t0 >= 40 && now - t0 < 2500) {
-      if (infoUntil) { infoUntil = 0; bootInfo = false; forceRedraw(); }
+      if (sosActive) { sosActive = false; forceRedraw(); }
+      else if (infoUntil) { infoUntil = 0; bootInfo = false; forceRedraw(); }
       else { infoUntil = now + 30000; infoDrawnAt = 0; }
     }
   }
@@ -1544,15 +1602,14 @@ const char* resetReasonStr() {
 }
 
 int postBatch(const Sample* batch, int n) {
-  static char body[BATCH * 96 + 720];
+  static char body[BATCH * 96 + 520];
   size_t cap = sizeof(body), pos = 0;
   uint32_t nowMs = millis();
   pos += snprintf(body + pos, cap - pos,
                   "{\"deviceId\":\"%s\",\"name\":\"%s\",\"location\":\"%s\",\"lat\":%.4f,\"lng\":%.4f,"
-                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s,\"heap\":%lu,\"rst\":\"%s\",\"drops\":%lu,\"dhtOk\":%s,\"readings\":[",
+                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s%s,\"readings\":[",
                   DEVICE_ID, DEVICE_NAME, DEVICE_LOC, DEVICE_LAT, DEVICE_LNG, FW_VERSION, macStr, claimCode,
-                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false",
-                  (unsigned long)ESP.getFreeHeap(), resetReasonStr(), (unsigned long)wifiDrops, dhtFailed ? "false" : "true");
+                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false", (unsigned long)ESP.getFreeHeap(), resetReasonStr(), (unsigned long)wifiDrops, dhtFailed ? "false" : "true", gasAlarm ? ",\"alarm\":\"gas\"" : "");
   for (int i = 0; i < n; i++) {
     pos += snprintf(body + pos, cap - pos, "%s{\"ageMs\":%lu", i ? "," : "", (unsigned long)(nowMs - batch[i].ms));
     appendField(body, cap, pos, "dust", batch[i], 0, 1);
@@ -1596,28 +1653,27 @@ int postBatch(const Sample* batch, int n) {
 
 void netTask(void*) {
   uint32_t lastTry = 0, lastUpload = 0;
-  bool wasUp = false;
   uint32_t waitMs = UPLOAD_EVERY_MS;
   for (;;) {
     serviceAudio();
-    if (restartReq) { delay(800); ESP.restart(); }
     portalTick();
+    if (restartReq) { delay(800); ESP.restart(); }
     if (!wifiBegun) { WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASS); wifiBegun = true; lastTry = millis(); }
 
     if (WiFi.status() != WL_CONNECTED) {
       netState = 0;
-      if (wasUp) { wasUp = false; wifiDrops++; }
+      wifiDrops++;
       if (millis() - lastTry > 20000) { lastTry = millis(); if (cfgSsid.length()) { WiFi.disconnect(); WiFi.begin(WIFI_SSID, WIFI_PASS); } }
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
     onWifiUp();
-    wasUp = true;
     if (netState == 0) netState = 1;
 
     if (replayRequested && lastEventId > 0) { replayRequested = false; playSpeech(lastEventId); }
 
-    if (millis() - lastUpload >= waitMs && ringCount() > 0) {
+    if ((millis() - lastUpload >= waitMs || uploadNow) && ringCount() > 0) {
+      uploadNow = false;
       lastUpload = millis();
       static Sample batch[BATCH];
       int n = ringPeek(batch, BATCH);
@@ -1628,7 +1684,7 @@ void netTask(void*) {
         netState = 2;
         waitMs = ringCount() > BATCH ? 2000 : UPLOAD_EVERY_MS;   // catch up quickly after an outage
         if (r > 0) { lastEventId = r; lastCloudSpeakMs = millis(); playSpeech(r); }
-        if (otaPending && ringCount() <= 3 && !speaking) { otaPending = false; runOta(); }   // 5 s uploads: a fresh sample is often already waiting, so do not demand an empty buffer
+        if (otaPending && ringCount() <= 3 && !speaking) { otaPending = false; runOta(); }
       } else {
         netState = 1;
         waitMs = 8000;                    // retry sooner; the readings stay buffered
@@ -1660,6 +1716,9 @@ void handleSerial() {
       prefs.putFloat("dust", dustBaselineV);
       prefs.putFloat("air",  airBaselineV);
       Serial.printf(">> Calibrated and saved. Dust baseline: %.3f V | Air baseline: %.3f V\n", dustBaselineV, airBaselineV);
+    } else if (ch == 'g' || ch == 'G') {
+      Serial.println(">> test gas alarm for 20 s");
+      gasTestUntil = millis() + 20000;
     } else if (ch == 't' || ch == 'T') {
       Serial.println(">> test beep (speaker + amplifier)");
       replayRequested = false;
@@ -1849,7 +1908,11 @@ void loop() {
   handleSerial();
   handleButton(now);
 
-  if (now - lastPulse >= 10) {
+  if (speaking) audioQuietUntil = now + 1500;     // speaker current shakes the supply: skip sensor readings during sound and 1.5 s after
+  bool audioQuiet = (int32_t)(now - audioQuietUntil) < 0;
+  if (audioQuiet) { dustSumMv = 0; mqSumMv = 0; sampleN = 0; }   // throw away anything half-collected
+
+  if (!audioQuiet && now - lastPulse >= 10) {
     lastPulse = now;
     takePulse();
   }
@@ -1869,7 +1932,7 @@ void loop() {
       if (!airCalibrated) airBaselineV = mqV;
       mqReady = true;
     }
-    if (mqReady) { curAir = calcAirQualityPercent(mqV); feed(wAir, curAir); }
+    if (mqReady) { curAir = calcAirQualityPercent(mqV); feed(wAir, curAir); gasStep(now, curAir); }
   }
 
   if (now - lastDht >= 2000) {
@@ -1896,6 +1959,7 @@ void loop() {
     pushTrend(now);
   }
   servicePending(now);
+  if (gasTrig) { gasTrig = false; recordSample(now); }
 
   if (otaBusy) {
     drawOtaScreen();
@@ -1903,6 +1967,13 @@ void loop() {
   } else if (wasOta) {
     wasOta = false;
     otaDrawnPct = -1;
+    forceRedraw();
+  } else if (gasAlarm) {
+    drawGasScreen(now);
+    wasGas = true;
+    if (!speaking && sirenRequest == 0 && (gasLastSound == 0 || now - gasLastSound >= 25000)) { gasLastSound = now; sirenRequest = 1; }
+  } else if (wasGas) {
+    wasGas = false;
     forceRedraw();
   } else if (infoActive(now)) {
     // pairing screen is showing
