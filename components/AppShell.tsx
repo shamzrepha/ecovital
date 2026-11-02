@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import GasAlarm from "./GasAlarm";
 
 const NAV_ITEMS = [
   { href: "/", label: "Home & Pods", short: "Home", icon: "⌂" },
@@ -43,6 +44,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
+      <GasAlarm />
       <div className="app-topbar">
         <div className="app-topbar-inner">
           <Link href="/" className="brand-link">

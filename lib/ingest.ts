@@ -67,7 +67,7 @@ function isQuietHour(nowMs: number, prefs: any): boolean {
 export async function ingest(
   info: DeviceInfo,
   rawReadings: RawReading[],
-  opts: { now?: number } = {},
+  opts: { now?: number; alarm?: "gas" } = {},
 ): Promise<IngestResult> {
   const sql = await db();
   const now = opts.now ?? Date.now();
@@ -171,6 +171,24 @@ export async function ingest(
   const st = await sql`SELECT state, name FROM devices WHERE id = ${id}`;
   const prev: DeviceState = { ...emptyState(), ...(st[0]?.state ?? {}) };
   const { next, triggers } = evaluateRules({ now, values, prev, forecasts, configs });
+
+  // The pod's own gas/fumes alarm (fast drop in the air index, judged on the pod). Logged once per 2 minutes.
+  if (opts.alarm === "gas") {
+    const recent = await sql`SELECT id FROM events WHERE device_id = ${id} AND data->>'alarm' = 'gas'
+                             AND ts > ${iso(now - 120_000)}::timestamptz LIMIT 1`;
+    if (!recent.length) {
+      const devName = podRow.nickname || st[0]?.name || id;
+      const msg = "Possible gas or fumes detected. Open the windows, put out any flame and leave the room if you smell gas.";
+      const ins = await sql`INSERT INTO events (device_id, ts, kind, metric, status, severity, message, spoken, spoken_flag, source, data)
+                 VALUES (${id}, ${iso(now)}::timestamptz, 'alert', 'air', 'bad-low', 2, ${msg}, ${null}, false, 'pod-alarm',
+                         ${JSON.stringify({ alarm: "gas", tags: ["measured"], action: "open_window", value: values.air ?? null })}::jsonb)
+                 RETURNING id`;
+      const eventId = Number(ins[0].id);
+      result.events.push(eventId);
+      await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
+                VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${"ALARM " + devName + ": possible gas or fumes"}, ${msg})`;
+    }
+  }
 
   // 4. one voice line per cycle (the most important trigger); the rest are logged silently
   if (triggers.length) {

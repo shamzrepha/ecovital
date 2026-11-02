@@ -40,6 +40,7 @@ export async function POST(req: Request) {
         meta: { fw: str(body.fw, 20), mac: str(body.mac, 20), claim: str(body.claim, 8), rssi: numOrNull(body.rssi), uptimeS: numOrNull(body.uptimeS), mqReady: body.mqReady === true },
       },
       readings,
+      { alarm: body.alarm === "gas" ? "gas" : undefined },
     );
     return NextResponse.json(result);
   } catch (e: any) {

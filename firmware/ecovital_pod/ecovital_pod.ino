@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "1.4"
+#define FW_VERSION "2.1"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -633,18 +633,31 @@ void writePcm(const uint8_t* data, size_t len) {
   }
 }
 
-void playTone(float freq, int ms) {
+void playToneVol(float freq, int ms, float vol) {
   int n = SPEECH_RATE * ms / 1000;
   int16_t frames[256 * 2];
   int fi = 0;
   for (int i = 0; i < n; i++) {
     float env = 1.0f;
     if (i < 200) env = i / 200.0f; else if (i > n - 200) env = (n - i) / 200.0f;
-    int16_t s = (int16_t)(sinf(2 * PI * freq * i / SPEECH_RATE) * 30000 * SPEAKER_VOLUME * env);
+    int16_t s = (int16_t)(sinf(2 * PI * freq * i / SPEECH_RATE) * 30000 * vol * env);
     frames[fi++] = s; frames[fi++] = s;
     if (fi >= 256 * 2) { i2sWrite(frames, fi * 2); fi = 0; }
   }
   if (fi) i2sWrite(frames, fi * 2);
+}
+
+void playTone(float freq, int ms) { playToneVol(freq, ms, SPEAKER_VOLUME); }
+
+void playSiren() {                               // loud two-tone siren (still silent if the pod is muted)
+  if (!i2sStart()) return;
+  speaking = true;
+  int16_t z[256 * 2] = {0};
+  i2sWrite(z, sizeof(z));
+  for (int k = 0; k < 8; k++) { playToneVol(960, 230, 0.8f); playToneVol(1400, 230, 0.8f); }
+  i2sWrite(z, sizeof(z));
+  speaking = false;
+  i2sStop();
 }
 
 void beepPattern(int count) {
@@ -748,6 +761,15 @@ uint32_t adviceAt = 0;
 const char* rapidMsg = nullptr;
 uint32_t rapidMsgAt = 0;
 
+// ----- gas / fumes alarm: a fast drop of the air index (MQ135 reacts to many gases and fumes, but it cannot say which) -----
+#define GAS_DROP_POINTS 15.0f    // alarm when the air index falls this far below its slow baseline...
+#define GAS_LOW_LEVEL   40.0f    // ...or goes under this level, for at least 1 second
+bool gasAlarm = false, wasGas = false, gasTrig = false;
+float airRef = NAN;                              // slow baseline of the air index
+uint32_t gasWarmAt = 0, gasLowSince = 0, gasClearSince = 0, gasStarted = 0, gasLastSound = 0, gasTestUntil = 0;
+volatile int sirenRequest = 0;
+volatile bool uploadNow = false;
+
 uint8_t classifyLocal(int m, float v, uint8_t prev) {
   const Lim& L = LIM[m];
   if (!isnan(L.bH) && (v >= L.bH || (prev == ST_BAD_H && v > L.bH - L.hyst))) return ST_BAD_H;
@@ -768,6 +790,7 @@ int clipFor(int m, uint8_t st) {
 }
 
 void queueClip(int id, int prio, uint32_t now) {
+  if (gasAlarm && id == CLIP_AIR_BAD) return;     // the siren already says this
   if (pendingClip < 0 || prio > pendingPrio) { pendingClip = id; pendingPrio = prio; pendingAt = now; }
 }
 
@@ -869,6 +892,7 @@ const char* adviceFor(int m, uint8_t st) {
 }
 
 void refreshAdvice(uint32_t now) {
+  if (gasAlarm) { setAdvice("Possible gas or fumes. Open the windows, put out any flame and leave the room if you smell gas.", 2); return; }
   int bestM = -1, bestSev = 0;
   for (int m = 0; m < 4; m++) { int sv = sevOf(locStatus[m]); if (sv > bestSev) { bestSev = sv; bestM = m; } }
   if (bestM >= 0) { setAdvice(adviceFor(bestM, locStatus[bestM]), bestSev == 2 ? 2 : 1); return; }
@@ -884,6 +908,53 @@ void refreshAdvice(uint32_t now) {
   }
   if (!mqReady) { setAdvice("Air sensor is warming up. Air readings are still settling.", 0); return; }
   setAdvice("All readings are within healthy limits.", 0);
+}
+
+void gasStep(uint32_t now, float air) {
+  if (isnan(air)) return;
+  bool test = gasTestUntil && (int32_t)(gasTestUntil - now) > 0;
+  if (isnan(airRef)) { airRef = air; gasWarmAt = now; }
+  if (!test && now - gasWarmAt < 20000) { airRef += 0.2f * (air - airRef); return; }   // let the sensor settle after warm-up
+  bool bad = test || air < GAS_LOW_LEVEL || air <= airRef - GAS_DROP_POINTS;
+  if (!gasAlarm) {
+    if (bad) {
+      if (!gasLowSince) gasLowSince = now ? now : 1;
+      if (now - gasLowSince >= (test ? 0 : 1000)) {
+        gasAlarm = true; gasStarted = now; gasLastSound = 0; gasClearSince = 0; gasTrig = true; uploadNow = true;
+        Serial.printf("[ALARM] possible gas or fumes: air index %.0f (baseline %.0f)\n", air, airRef);
+      }
+    } else {
+      gasLowSince = 0;
+      airRef += 0.01f * (air - airRef);          // follow slow changes only
+    }
+  } else {
+    bool ok = !test && air >= GAS_LOW_LEVEL + 10 && air >= airRef - 6.0f;
+    if (ok) { if (!gasClearSince) gasClearSince = now ? now : 1; } else gasClearSince = 0;
+    bool timeout = now - gasStarted > 300000UL;  // never stay in alarm forever if the room really changed
+    if ((gasClearSince && now - gasClearSince >= 10000) || timeout) {
+      gasAlarm = false; gasLowSince = 0; uploadNow = true;
+      if (timeout) airRef = air;
+      Serial.println("[ALARM] cleared");
+      queueClip(CLIP_ALL_GOOD, 90, now);
+    }
+  }
+}
+
+void drawGasScreen(uint32_t now) {
+  static int lastPhase = -1;
+  int phase = (now / 400) & 1;
+  if (phase == lastPhase) return;
+  lastPhase = phase;
+  tft.fillScreen(phase ? 0xF800 : 0x8000);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setTextSize(2);
+  tft.setCursor(22, 8);   tft.print("WARNING");
+  tft.setTextSize(1);
+  tft.setCursor(20, 34);  tft.print("Possible gas or fumes");
+  tft.setCursor(20, 54);  tft.print("1. Open the windows");
+  tft.setCursor(20, 68);  tft.print("2. Put out any flame");
+  tft.setCursor(20, 82);  tft.print("3. Leave if you smell gas");
+  tft.setCursor(20, 106); tft.printf("Air index %d%%", (int)(isnan(curAir) ? 0 : curAir));
 }
 
 void servicePending(uint32_t now) {             // called every loop
@@ -932,6 +1003,7 @@ void playClip(int id) {
 }
 
 void serviceAudio() {                           // runs on the network core, the only place that touches the speaker after boot
+  if (sirenRequest > 0) { sirenRequest = 0; playSiren(); playClip(CLIP_AIR_BAD); }
   if (clipRequest >= 0) { int c = clipRequest; clipRequest = -1; playClip(c); }
   if (beepRequest > 0)  { int c = beepRequest; beepRequest = 0; beepPattern(c); }
 }
@@ -1465,9 +1537,9 @@ int postBatch(const Sample* batch, int n) {
   uint32_t nowMs = millis();
   pos += snprintf(body + pos, cap - pos,
                   "{\"deviceId\":\"%s\",\"name\":\"%s\",\"location\":\"%s\",\"lat\":%.4f,\"lng\":%.4f,"
-                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s,\"readings\":[",
+                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s%s,\"readings\":[",
                   DEVICE_ID, DEVICE_NAME, DEVICE_LOC, DEVICE_LAT, DEVICE_LNG, FW_VERSION, macStr, claimCode,
-                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false");
+                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false", gasAlarm ? ",\"alarm\":\"gas\"" : "");
   for (int i = 0; i < n; i++) {
     pos += snprintf(body + pos, cap - pos, "%s{\"ageMs\":%lu", i ? "," : "", (unsigned long)(nowMs - batch[i].ms));
     appendField(body, cap, pos, "dust", batch[i], 0, 1);
@@ -1528,7 +1600,8 @@ void netTask(void*) {
 
     if (replayRequested && lastEventId > 0) { replayRequested = false; playSpeech(lastEventId); }
 
-    if (millis() - lastUpload >= waitMs && ringCount() > 0) {
+    if ((millis() - lastUpload >= waitMs || uploadNow) && ringCount() > 0) {
+      uploadNow = false;
       lastUpload = millis();
       static Sample batch[BATCH];
       int n = ringPeek(batch, BATCH);
@@ -1571,6 +1644,9 @@ void handleSerial() {
       prefs.putFloat("dust", dustBaselineV);
       prefs.putFloat("air",  airBaselineV);
       Serial.printf(">> Calibrated and saved. Dust baseline: %.3f V | Air baseline: %.3f V\n", dustBaselineV, airBaselineV);
+    } else if (ch == 'g' || ch == 'G') {
+      Serial.println(">> test gas alarm for 20 s");
+      gasTestUntil = millis() + 20000;
     } else if (ch == 't' || ch == 'T') {
       Serial.println(">> test beep (speaker + amplifier)");
       replayRequested = false;
@@ -1780,7 +1856,7 @@ void loop() {
       if (!airCalibrated) airBaselineV = mqV;
       mqReady = true;
     }
-    if (mqReady) { curAir = calcAirQualityPercent(mqV); feed(wAir, curAir); }
+    if (mqReady) { curAir = calcAirQualityPercent(mqV); feed(wAir, curAir); gasStep(now, curAir); }
   }
 
   if (now - lastDht >= 2000) {
@@ -1807,6 +1883,7 @@ void loop() {
     pushTrend(now);
   }
   servicePending(now);
+  if (gasTrig) { gasTrig = false; recordSample(now); }
 
   if (otaBusy) {
     drawOtaScreen();
@@ -1814,6 +1891,13 @@ void loop() {
   } else if (wasOta) {
     wasOta = false;
     otaDrawnPct = -1;
+    forceRedraw();
+  } else if (gasAlarm) {
+    drawGasScreen(now);
+    wasGas = true;
+    if (!speaking && sirenRequest == 0 && (gasLastSound == 0 || now - gasLastSound >= 25000)) { gasLastSound = now; sirenRequest = 1; }
+  } else if (wasGas) {
+    wasGas = false;
     forceRedraw();
   } else if (infoActive(now)) {
     // pairing screen is showing

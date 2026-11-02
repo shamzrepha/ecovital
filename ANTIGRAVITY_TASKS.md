@@ -95,3 +95,18 @@ New page `/voice` (add to the nav and bottom bar), plus `POST /api/voice`.
 - A pod set to Pidgin speaks a Pidgin line after a real event, or clearly falls back to English audio with Pidgin text.
 - Voice Center answers a spoken question about the live pod and speaks the reply, in at least English and Pidgin end to end.
 - Per-language speech quality results are written down. `npm test` and `npx tsc --noEmit` pass.
+
+---
+
+# Round 3: gas / fumes alarm (firmware 2.1)
+
+Done by Claude, already in this branch and tested locally (21/21 tests, `tsc` clean):
+- Firmware 2.1 detects a fast drop of the air index (15 points below its slow baseline, or under 40, for 1 s). The pod then flashes a red warning screen, plays a siren and the spoken air warning every 25 s, uploads immediately with `"alarm":"gas"`, and clears 10 s after the air recovers. Serial command `g` runs a 20 s test alarm.
+- `POST /api/ingest` with `alarm: "gas"` creates one `alert` event per 2 minutes (`data.alarm = "gas"`) and a `notifications_log` row. `GET /api/alarms` lists alarms from the last 3 minutes. `components/GasAlarm.tsx` (mounted in `AppShell`) shows a red banner with a siren and a browser notification while the app is open.
+
+Honest limits to keep in the UI: the MQ135 reacts to many gases and fumes but cannot identify them, and this is NOT a certified gas-leak detector. The wording is "possible gas or fumes". Thresholds (`GAS_DROP_POINTS`, `GAS_LOW_LEVEL` in the firmware) must be tuned on the real pod with the lighter test.
+
+Still to do:
+1. **Real background push.** Today `notifications_log` rows are written but nothing sends them to a phone that has the app closed. Implement Web Push: `web-push` package, VAPID keys in env (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`), a subscribe flow on the Settings page that stores into `push_subscriptions`, a `push` handler in `public/sw.js`, and sending for every `notifications_log` row (gas alarms first, never during quiet hours except gas alarms). iPhone needs the app added to the Home Screen. Say clearly in the UI when push is not enabled.
+2. Add an alarm history list on the pod page (time, value, cleared time) and a "Test alarm" button that sends a clearly labelled test.
+3. Tests: alarm event is created once per 2 minutes; `/api/alarms` returns only recent alarms; ingest without the flag creates none.
