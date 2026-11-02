@@ -1602,14 +1602,16 @@ const char* resetReasonStr() {
 }
 
 int postBatch(const Sample* batch, int n) {
-  static char body[BATCH * 96 + 520];
+  static char body[BATCH * 96 + 720];
   size_t cap = sizeof(body), pos = 0;
   uint32_t nowMs = millis();
   pos += snprintf(body + pos, cap - pos,
                   "{\"deviceId\":\"%s\",\"name\":\"%s\",\"location\":\"%s\",\"lat\":%.4f,\"lng\":%.4f,"
-                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s%s,\"readings\":[",
+                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s,\"heap\":%lu,\"rst\":\"%s\",\"drops\":%lu,\"dhtOk\":%s%s,\"readings\":[",
                   DEVICE_ID, DEVICE_NAME, DEVICE_LOC, DEVICE_LAT, DEVICE_LNG, FW_VERSION, macStr, claimCode,
-                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false", (unsigned long)ESP.getFreeHeap(), resetReasonStr(), (unsigned long)wifiDrops, dhtFailed ? "false" : "true", gasAlarm ? ",\"alarm\":\"gas\"" : "");
+                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false",
+                  (unsigned long)ESP.getFreeHeap(), resetReasonStr(), (unsigned long)wifiDrops, dhtFailed ? "false" : "true",
+                  gasAlarm ? ",\"alarm\":\"gas\"" : "");
   for (int i = 0; i < n; i++) {
     pos += snprintf(body + pos, cap - pos, "%s{\"ageMs\":%lu", i ? "," : "", (unsigned long)(nowMs - batch[i].ms));
     appendField(body, cap, pos, "dust", batch[i], 0, 1);
@@ -1653,6 +1655,7 @@ int postBatch(const Sample* batch, int n) {
 
 void netTask(void*) {
   uint32_t lastTry = 0, lastUpload = 0;
+  bool wasUp = false;
   uint32_t waitMs = UPLOAD_EVERY_MS;
   for (;;) {
     serviceAudio();
@@ -1662,12 +1665,13 @@ void netTask(void*) {
 
     if (WiFi.status() != WL_CONNECTED) {
       netState = 0;
-      wifiDrops++;
+      if (wasUp) { wasUp = false; wifiDrops++; }
       if (millis() - lastTry > 20000) { lastTry = millis(); if (cfgSsid.length()) { WiFi.disconnect(); WiFi.begin(WIFI_SSID, WIFI_PASS); } }
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
     onWifiUp();
+    wasUp = true;
     if (netState == 0) netState = 1;
 
     if (replayRequested && lastEventId > 0) { replayRequested = false; playSpeech(lastEventId); }
@@ -1967,6 +1971,13 @@ void loop() {
   } else if (wasOta) {
     wasOta = false;
     otaDrawnPct = -1;
+    forceRedraw();
+  } else if (sosActive) {
+    drawSosScreen(now);
+    wasSos = true;
+    if (now - sosStarted > 15000UL) { sosActive = false; forceRedraw(); }
+  } else if (wasSos) {
+    wasSos = false;
     forceRedraw();
   } else if (gasAlarm) {
     drawGasScreen(now);
