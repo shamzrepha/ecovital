@@ -38,7 +38,7 @@ function recognizeNative(lang: string): Promise<string> {
 
 // Browser voice: picks a real installed voice (an unsupported language such as en-NG can make some browsers stay silent),
 // speaks sentence by sentence (long text stalls in Chrome), and reports whether anything was actually spoken.
-async function speakWithBrowser(text: string, recLang: string): Promise<boolean> {
+async function speakWithBrowser(text: string, recLang: string, isAborted?: () => boolean): Promise<boolean> {
   const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
   if (!synth) return false;
   let voices = synth.getVoices();
@@ -46,6 +46,7 @@ async function speakWithBrowser(text: string, recLang: string): Promise<boolean>
     await new Promise<void>((r) => { synth.onvoiceschanged = () => r(); setTimeout(r, 900); });
     voices = synth.getVoices();
   }
+  if (isAborted?.()) return false;
   const base = recLang.split("-")[0].toLowerCase();
   const voice =
     voices.find((v) => v.lang.toLowerCase() === recLang.toLowerCase()) ||
@@ -57,6 +58,7 @@ async function speakWithBrowser(text: string, recLang: string): Promise<boolean>
   let started = false;
   synth.cancel();
   for (const part of parts) {
+    if (isAborted?.()) { synth.cancel(); return false; }
     await new Promise<void>((resolve) => {
       const u = new SpeechSynthesisUtterance(part);
       if (voice) { u.voice = voice; u.lang = voice.lang; }
@@ -96,6 +98,7 @@ function AskInner() {
   const chatRef = useRef<HTMLDivElement | null>(null);
   const playCtxRef = useRef<AudioContext | null>(null);
   const srcRef = useRef<AudioBufferSourceNode | null>(null);
+  const playTokenRef = useRef(0);
   const [speakNote, setSpeakNote] = useState("");
   const threadRef = useRef("");
   const langRef = useRef("en-NG");
@@ -181,10 +184,23 @@ function AskInner() {
   }
 
   function stopSpeaking() {
-    try { srcRef.current?.stop(); srcRef.current = null; window.speechSynthesis?.cancel(); } catch {}
+    playTokenRef.current++;
+    try {
+      if (srcRef.current) {
+        srcRef.current.onended = null;
+        srcRef.current.stop();
+        srcRef.current.disconnect();
+        srcRef.current = null;
+      }
+    } catch {}
+    try { window.speechSynthesis?.cancel(); } catch {}
+    setSpeakNote("");
+    setVState((s) => (s === "speaking" ? "idle" : s));
   }
 
   async function speak(text: string) {
+    stopSpeaking();
+    const token = ++playTokenRef.current;
     setVState("speaking");
     setSpeakNote("Getting my voice ready…");
     setVoiceMsg("");
@@ -193,33 +209,50 @@ function AskInner() {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text, lang: langRef.current }),
       });
+      if (token !== playTokenRef.current) return;
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || "The server voice is not available.");
       }
       const data = await res.arrayBuffer();
+      if (token !== playTokenRef.current) return;
       if (!playCtxRef.current) unlockAudio();
       const ctx = playCtxRef.current!;
       await ctx.resume();
       const audio = await ctx.decodeAudioData(data);
+      if (token !== playTokenRef.current) return;
       setSpeakNote("");
       await new Promise<void>((resolve) => {
+        try {
+          if (srcRef.current) {
+            srcRef.current.onended = null;
+            srcRef.current.stop();
+            srcRef.current.disconnect();
+            srcRef.current = null;
+          }
+        } catch {}
         const src = ctx.createBufferSource();
         src.buffer = audio; src.connect(ctx.destination);
         srcRef.current = src;
-        src.onended = () => resolve();
+        src.onended = () => {
+          if (srcRef.current === src) srcRef.current = null;
+          resolve();
+        };
         src.start();
       });
     } catch (e: any) {
+      if (token !== playTokenRef.current) return;
       // The server voice did not work: say why, and use the browser's own voice so it still talks.
       setSpeakNote("");
       setVoiceMsg(`Server voice unavailable (${String(e?.message ?? e).slice(0, 160)}). Using your browser's voice.`);
-      const ok = await speakWithBrowser(text, LANGS.find((l) => l.id === langRef.current)?.rec ?? "en-NG");
-      if (!ok) setVoiceMsg("I could not play the answer out loud on this device. Check the volume, then tap 🔊 Listen on the message.");
+      const ok = await speakWithBrowser(text, LANGS.find((l) => l.id === langRef.current)?.rec ?? "en-NG", () => token !== playTokenRef.current);
+      if (!ok && token === playTokenRef.current) setVoiceMsg("I could not play the answer out loud on this device. Check the volume, then tap 🔊 Listen on the message.");
     } finally {
-      srcRef.current = null;
-      setSpeakNote("");
-      setVState((s) => (s === "speaking" ? "idle" : s));
+      if (token === playTokenRef.current) {
+        srcRef.current = null;
+        setSpeakNote("");
+        setVState((s) => (s === "speaking" ? "idle" : s));
+      }
     }
   }
 
@@ -227,6 +260,7 @@ function AskInner() {
   async function askQuestion(qText: string, spokenAloud = false): Promise<string | null> {
     const q = qText.trim();
     if (!q || busy) return null;
+    stopSpeaking();
     setBusy(true);
     setQuestion("");
     const tid = threadRef.current || newThreadId();

@@ -1,6 +1,6 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { generateLine, answerPodQuestion, type AiContext } from "../lib/ai.ts";
+import { generateLine, answerPodQuestion, cleanHumanAnswer, type AiContext } from "../lib/ai.ts";
 import { aiStats, resetModelCache } from "../lib/gemini-models.ts";
 
 const originalFetch = global.fetch;
@@ -137,4 +137,21 @@ test("mock fetch: honesty guards hold: unsupported sensors (CO2/PM2.5) and medic
   });
   assert.equal(qMedical.source, "template");
   assert.ok(qMedical.answer.includes("cannot provide medical advice or diagnosis"));
+});
+
+test("cleanHumanAnswer unwraps JSON objects/arrays and strips leaked prompt instructions", () => {
+  const jsonArray = '[ { "answer": "Ndewo, a bụ m enyi gị EcoVital na-elekọta ikuku n\'ime ụlọ gị." } ]';
+  assert.equal(cleanHumanAnswer(jsonArray), "Ndewo, a bụ m enyi gị EcoVital na-elekọta ikuku n'ime ụlọ gị.");
+
+  const jsonObject = '{"answer": "Air is fresh and comfortable."}';
+  assert.equal(cleanHumanAnswer(jsonObject), "Air is fresh and comfortable.");
+
+  const leakedPrompt = "read the following out aloud in warm voice nd in igbo: Ndewo, kedu ka i mere?";
+  assert.equal(cleanHumanAnswer(leakedPrompt), "Ndewo, kedu ka i mere?");
+
+  const leakedTtsPrefix = "Say this warmly in Igbo: Ikuku dị ọcha.";
+  assert.equal(cleanHumanAnswer(leakedTtsPrefix), "Ikuku dị ọcha.");
+
+  const codeFencedJson = "```json\n[{\"answer\": \"Open the window for fresh airflow.\"}]\n```";
+  assert.equal(cleanHumanAnswer(codeFencedJson), "Open the window for fresh airflow.");
 });

@@ -90,10 +90,10 @@ LOCAL_TRANSLATIONS.pcm = {
 /** Languages the app can write and speak. Igbo, Yoruba, Hausa and Pidgin are machine-written and say so. */
 export const LANGS: Record<string, { label: string; prompt: string; tts: string; machine: boolean; rec: string }> = {
   "en-NG": { label: "English", prompt: "clear, warm Nigerian English", tts: "", machine: false, rec: "en-NG" },
-  pcm: { label: "Naija Pidgin", prompt: "friendly, simple Nigerian Pidgin English (Naija Pidgin)", tts: "Say this warmly in a Nigerian Pidgin English accent: ", machine: true, rec: "en-NG" },
-  ig: { label: "Igbo", prompt: "simple Igbo (use the English word when unsure of an Igbo one)", tts: "Say this warmly in Igbo: ", machine: true, rec: "ig-NG" },
-  yo: { label: "Yoruba", prompt: "simple Yoruba (use the English word when unsure of a Yoruba one)", tts: "Say this warmly in Yoruba: ", machine: true, rec: "yo-NG" },
-  ha: { label: "Hausa", prompt: "simple Hausa (use the English word when unsure of a Hausa one)", tts: "Say this warmly in Hausa: ", machine: true, rec: "ha-NG" },
+  pcm: { label: "Naija Pidgin", prompt: "friendly, simple Nigerian Pidgin English (Naija Pidgin)", tts: "", machine: true, rec: "en-NG" },
+  ig: { label: "Igbo", prompt: "simple Igbo (use the English word when unsure of an Igbo one)", tts: "", machine: true, rec: "ig-NG" },
+  yo: { label: "Yoruba", prompt: "simple Yoruba (use the English word when unsure of a Yoruba one)", tts: "", machine: true, rec: "yo-NG" },
+  ha: { label: "Hausa", prompt: "simple Hausa (use the English word when unsure of a Hausa one)", tts: "", machine: true, rec: "ha-NG" },
 };
 export const normLang = (l?: string | null): string => (l && LANGS[l] ? l : "en-NG");
 
@@ -202,6 +202,41 @@ export function fallbackLine(ctx: AiContext): string {
   return clean(`${cap} ${verb} ${val}, which is ${word}. ${act}`);
 }
 
+/** Extracts clean, natural human text from Gemini output, safely unpacking JSON answers and stripping prompt leaks. */
+export function cleanHumanAnswer(raw: string): string {
+  let text = (raw ?? "").trim();
+  // Strip markdown code fences like ```json ... ```
+  const codeBlock = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (codeBlock) text = codeBlock[1].trim();
+
+  // If the model returned JSON array or object, extract the answer string
+  if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const item = parsed[0];
+        if (typeof item === "string") text = item;
+        else if (item && typeof item === "object") {
+          text = item.answer || item.text || item.message || item.line || Object.values(item).find((v) => typeof v === "string") || text;
+        }
+      } else if (parsed && typeof parsed === "object") {
+        text = parsed.answer || parsed.text || parsed.message || parsed.line || Object.values(parsed).find((v) => typeof v === "string") || text;
+      }
+    } catch { /* keep raw text */ }
+  }
+
+  // Strip accidental meta-instructions or prompt prefixes that a model may echo
+  text = text
+    .replace(/^read the following (?:text )?(?:out )?aloud[^\n:]*[:\s]*/i, "")
+    .replace(/^say this warmly in [^\n:]*[:\s]*/i, "")
+    .replace(/^here is (?:the )?(?:spoken )?answer[^\n:]*[:\s]*/i, "")
+    .replace(/[*_`#]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return text;
+}
+
 export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxTokens = 320): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
@@ -216,7 +251,7 @@ export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxToken
       generationConfig: {
         maxOutputTokens: maxTokens,
         temperature: 0.45,
-        ...(systemPrompt.includes("Return JSON") || systemPrompt.includes("JSON:") || prompt.includes("Data (JSON):") ? { responseMimeType: "application/json" } : {}),
+        ...(systemPrompt.includes("Return JSON") ? { responseMimeType: "application/json" } : {}),
       },
     };
     const ctl = new AbortController();
@@ -491,7 +526,7 @@ export async function answerPodQuestion(
       (followUp ? `(This is a short reply to your last question: "${followUp.question}". They said "${followUp.answer}". Carry on from that question.)\n` : "") +
       `Room & Sensor Data (JSON):\n${JSON.stringify({ ...data, question: undefined })}`;
     const raw = await geminiText(prompt, `${ASK_SYSTEM}\n11. Reply in ${LANGS[lang].prompt}. Keep any numbers exactly as given.`, 700);
-    const cleaned = raw.replace(/[*_`#]/g, "").trim();
+    const cleaned = cleanHumanAnswer(raw);
     if (cleaned.length > 10) {
       return { answer: cleaned, citations, source: "gemini", language: lang, machineTranslated: LANGS[lang].machine };
     }
@@ -740,11 +775,16 @@ async function synthesizeStandard(text: string, model: string): Promise<Buffer> 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 11000);
   try {
+    const cleanText = cleanHumanAnswer(text);
+    if (!cleanText) throw new Error("No text to speak");
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST", signal: ctl.signal,
       headers: { "content-type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: text.startsWith("Read the following") ? text : `Read the following text aloud: ${text}` }] }],
+        systemInstruction: {
+          parts: [{ text: "You are a text-to-speech synthesis engine. Speak the user's input text clearly and naturally. Never generate text replies and never read system instructions." }],
+        },
+        contents: [{ parts: [{ text: cleanText }] }],
         generationConfig: {
           responseModalities: ["AUDIO"],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
@@ -765,7 +805,8 @@ async function synthesizeStandard(text: string, model: string): Promise<Buffer> 
 
 /** Returns 16-bit mono PCM at 24 kHz. Tries the newest speech models this key can use, then the older route. Throws with every reason if all fail. */
 export async function synthesize(rawText: string, lang?: string): Promise<Buffer> {
-  const text = (lang && LANGS[lang]?.tts ? LANGS[lang].tts : "") + rawText;
+  const text = cleanHumanAnswer(rawText);
+  if (!text) throw new Error("No text to speak");
   const errors: string[] = [];
   for (const model of (await ttsModels()).slice(0, 2)) {
     try {

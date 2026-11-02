@@ -42,10 +42,13 @@ function VoiceCenterInner() {
   const mic = useMic();
   const playCtxRef = useRef<AudioContext | null>(null);
   const srcRef = useRef<AudioBufferSourceNode | null>(null);
+  const playTokenRef = useRef(0);
+  const vStateRef = useRef<VoiceState>("idle");
   const podRef = useRef("");
   const langRef = useRef("en-NG");
   podRef.current = podId;
   langRef.current = language;
+  vStateRef.current = vState;
 
   useEffect(() => {
     try {
@@ -86,28 +89,46 @@ function VoiceCenterInner() {
   }
 
   function stopSpeaking() {
+    playTokenRef.current++;
     try {
-      srcRef.current?.stop();
-      srcRef.current = null;
-      window.speechSynthesis?.cancel();
+      if (srcRef.current) {
+        srcRef.current.onended = null;
+        srcRef.current.stop();
+        srcRef.current.disconnect();
+        srcRef.current = null;
+      }
+    } catch { /* ignore */ }
+    try {
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
     } catch { /* ignore */ }
     setVState("idle");
     setSpeakNote("");
   }
 
-  async function playAudioBuffer(buf: ArrayBuffer): Promise<boolean> {
+  async function playAudioBuffer(buf: ArrayBuffer, token: number): Promise<boolean> {
     unlockAudio();
     if (!playCtxRef.current) return false;
     const ctx = playCtxRef.current;
     await ctx.resume();
     const audio = await ctx.decodeAudioData(buf);
+    if (token !== playTokenRef.current) return false; // Stale trigger aborted
     return new Promise<boolean>((resolve) => {
+      try {
+        if (srcRef.current) {
+          srcRef.current.onended = null;
+          srcRef.current.stop();
+          srcRef.current.disconnect();
+          srcRef.current = null;
+        }
+      } catch {}
       const src = ctx.createBufferSource();
       src.buffer = audio;
       src.connect(ctx.destination);
       srcRef.current = src;
       src.onended = () => {
-        srcRef.current = null;
+        if (srcRef.current === src) srcRef.current = null;
         resolve(true);
       };
       src.start();
@@ -115,6 +136,8 @@ function VoiceCenterInner() {
   }
 
   async function playVoiceResponse(b64Audio: string | null, text: string) {
+    stopSpeaking();
+    const token = ++playTokenRef.current;
     setVState("speaking");
     setSpeakNote("Playing voice answer…");
     setAudioBlocked(false);
@@ -125,16 +148,20 @@ function VoiceCenterInner() {
         const len = bin.length;
         const bytes = new Uint8Array(len);
         for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
-        await playAudioBuffer(bytes.buffer);
-        setVState("idle");
-        setSpeakNote("");
-        return;
+        const played = await playAudioBuffer(bytes.buffer, token);
+        if (token === playTokenRef.current) {
+          setVState("idle");
+          setSpeakNote("");
+        }
+        if (played) return;
       } catch (e: any) {
         if (e?.name === "NotAllowedError") {
           setAudioBlocked(true);
         }
       }
     }
+
+    if (token !== playTokenRef.current) return;
 
     // Fall back to browser speech synthesis
     try {
@@ -143,17 +170,30 @@ function VoiceCenterInner() {
         synth.cancel();
         const u = new SpeechSynthesisUtterance(text);
         u.lang = language === "pcm" ? "en-NG" : language.startsWith("en") ? "en-NG" : language;
-        u.onend = () => setVState("idle");
-        u.onerror = () => setVState("idle");
+        u.onend = () => {
+          if (token === playTokenRef.current) {
+            setVState("idle");
+            setSpeakNote("");
+          }
+        };
+        u.onerror = () => {
+          if (token === playTokenRef.current) {
+            setVState("idle");
+            setSpeakNote("");
+          }
+        };
         synth.speak(u);
         return;
       }
     } catch { /* speech synthesis unavailable */ }
-    setVState("idle");
-    setSpeakNote("");
+    if (token === playTokenRef.current) {
+      setVState("idle");
+      setSpeakNote("");
+    }
   }
 
   const askByVoice = useCallback(async () => {
+    if (vStateRef.current === "listening" || vStateRef.current === "thinking") return;
     stopSpeaking();
     setErrorMsg("");
     setAudioBlocked(false);

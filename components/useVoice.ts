@@ -23,7 +23,17 @@ export function useVoice() {
   }, []);
 
   const play = useCallback(async (eventId: number, text: string) => {
-    try { audio.current?.pause(); speechSynthesis.cancel(); } catch { /* ignore */ }
+    try {
+      if (audio.current) {
+        audio.current.pause();
+        audio.current.currentTime = 0;
+        audio.current.src = "";
+        audio.current = null;
+      }
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    } catch { /* ignore */ }
     setBlocked(false);
     try {
       const a = new Audio(`/api/tts/${eventId}?fmt=wav`);
