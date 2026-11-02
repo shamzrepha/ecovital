@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, iso } from "@/lib/db";
 import { answerPodQuestion, normLang } from "@/lib/ai";
+import { aiStats } from "@/lib/gemini-models";
 import { errorResponse, requirePodOwner } from "@/lib/session";
 import { forecastForAsk, generateAiPredictions } from "@/lib/ai-predict";
 
@@ -121,6 +122,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       answer: ans.answer, citations: citationChips, source: ans.source, thread,
       language: ans.language ?? "en-NG", machineTranslated: !!ans.machineTranslated,
+      model: ans.source === "gemini" ? aiStats.textModel : null,
     });
   } catch (e: any) {
     return errorResponse(e);

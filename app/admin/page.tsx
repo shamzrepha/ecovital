@@ -310,6 +310,49 @@ function AdminConsole() {
   );
 }
 
+function GeminiCheck() {
+  const [res, setRes] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  async function run() {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/admin/ai-check", { cache: "no-store" });
+      setRes(await r.json());
+    } catch {
+      setRes({ ok: false, error: "Could not reach the server." });
+    } finally {
+      setBusy(false);
+    }
+  }
+  const line = (label: string, t: any) =>
+    t ? <p style={{ margin: "4px 0" }}><b>{label}:</b> {t.ok ? <>works with <code>{t.model}</code> ({t.ms} ms)</> : <span style={{ color: "var(--bad)" }}>failed. {t.error}</span>}</p> : null;
+  return (
+    <div className="wrap" style={{ paddingTop: 0 }}>
+      <section className="card" style={{ marginBottom: 16 }}>
+        <h2>Check Gemini</h2>
+        <p className="note" style={{ marginTop: 0 }}>Shows which models the app picked for your key and makes one real text call and one real speech call.</p>
+        <button type="button" className="btn small primary" onClick={run} disabled={busy}>{busy ? "Testing…" : "Run the check"}</button>
+        {res && (
+          <div style={{ marginTop: 12, fontSize: 14 }}>
+            {res.error && <div className="banner">{res.error}</div>}
+            {res.keySet === false && <div className="banner">GEMINI_API_KEY is not set on the server.</div>}
+            {res.keySet && (
+              <>
+                <p style={{ margin: "4px 0" }}><b>Models your key can see:</b> {res.listedModels ?? "could not be listed"}{res.listError ? ` (${res.listError})` : ""}</p>
+                <p style={{ margin: "4px 0" }}><b>Text order:</b> {res.textChoices.join(", ")}</p>
+                <p style={{ margin: "4px 0" }}><b>Speech order:</b> {res.speechChoices.join(", ")}</p>
+                {res.envTextModel && <p className="note" style={{ margin: "4px 0" }}>GEMINI_TEXT_MODEL is set to <code>{res.envTextModel}</code>. It is only used if it exists for your key and nothing better was found. Clear it to use the automatic choice.</p>}
+                {line("Text", res.text)}
+                {line("Speech", res.speech)}
+              </>
+            )}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
 function fmtDate(ms: number) {
   return new Date(ms).toLocaleString([], { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
@@ -375,5 +418,5 @@ export default function AdminPage() {
       </div>
     );
   }
-  return (<><AdminConsole /><UsersPanel /></>);
+  return (<><AdminConsole /><GeminiCheck /><UsersPanel /></>);
 }

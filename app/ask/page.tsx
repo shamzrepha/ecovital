@@ -36,6 +36,40 @@ function recognizeNative(lang: string): Promise<string> {
   });
 }
 
+// Browser voice: picks a real installed voice (an unsupported language such as en-NG can make some browsers stay silent),
+// speaks sentence by sentence (long text stalls in Chrome), and reports whether anything was actually spoken.
+async function speakWithBrowser(text: string, recLang: string): Promise<boolean> {
+  const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
+  if (!synth) return false;
+  let voices = synth.getVoices();
+  if (!voices.length) {
+    await new Promise<void>((r) => { synth.onvoiceschanged = () => r(); setTimeout(r, 900); });
+    voices = synth.getVoices();
+  }
+  const base = recLang.split("-")[0].toLowerCase();
+  const voice =
+    voices.find((v) => v.lang.toLowerCase() === recLang.toLowerCase()) ||
+    voices.find((v) => v.lang.toLowerCase().startsWith(base)) ||
+    voices.find((v) => /^en-(ng|gb|us|za|au)/i.test(v.lang)) ||
+    voices.find((v) => v.lang.toLowerCase().startsWith("en")) ||
+    voices[0];
+  const parts = (text.match(/[^.!?]+[.!?]*\s*/g) ?? [text]).map((p) => p.trim()).filter(Boolean);
+  let started = false;
+  synth.cancel();
+  for (const part of parts) {
+    await new Promise<void>((resolve) => {
+      const u = new SpeechSynthesisUtterance(part);
+      if (voice) { u.voice = voice; u.lang = voice.lang; }
+      const guard = setTimeout(() => resolve(), 15000);
+      u.onstart = () => { started = true; };
+      u.onend = () => { clearTimeout(guard); resolve(); };
+      u.onerror = () => { clearTimeout(guard); resolve(); };
+      synth.speak(u);
+    });
+  }
+  return started;
+}
+
 function AskInner() {
   const searchParams = useSearchParams();
   const initialPod = searchParams.get("pod") || "";
@@ -60,6 +94,9 @@ function AskInner() {
   const liveRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const chatRef = useRef<HTMLDivElement | null>(null);
+  const playCtxRef = useRef<AudioContext | null>(null);
+  const srcRef = useRef<AudioBufferSourceNode | null>(null);
+  const [speakNote, setSpeakNote] = useState("");
   const threadRef = useRef("");
   const langRef = useRef("en-NG");
   const podRef = useRef("");
@@ -73,7 +110,7 @@ function AskInner() {
     fetch("/api/voice", { cache: "no-store" }).then((r) => r.json()).then((j) => setSttAvailable(!!j.available)).catch(() => setSttAvailable(false));
   }, []);
   const pickLang = (v: string) => { setLanguage(v); try { localStorage.setItem("ev-ask-lang", v); } catch {} };
-  const pickRead = (v: boolean) => { setReadAloud(v); try { localStorage.setItem("ev-ask-read", v ? "1" : "0"); } catch {} };
+  const pickRead = (v: boolean) => { if (v) unlockAudio(); setReadAloud(v); try { localStorage.setItem("ev-ask-read", v ? "1" : "0"); } catch {} };
 
   // Pods, then the chats for the chosen pod
   useEffect(() => {
@@ -128,39 +165,60 @@ function AskInner() {
   }
 
   // ----- speaking -----
+  // Browsers only let a page play sound after a tap. We make one audio context on the first tap and reuse it for every
+  // spoken answer, so answers still play later on their own (including in a live conversation and on phones).
+  function unlockAudio() {
+    try {
+      const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!playCtxRef.current) playCtxRef.current = new Ctx();
+      const ctx = playCtxRef.current!;
+      ctx.resume().catch(() => {});
+      const b = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = b; src.connect(ctx.destination); src.start(0);
+      window.speechSynthesis?.getVoices();
+    } catch { /* no audio available */ }
+  }
+
   function stopSpeaking() {
-    try { audioRef.current?.pause(); audioRef.current = null; window.speechSynthesis?.cancel(); } catch {}
+    try { srcRef.current?.stop(); srcRef.current = null; window.speechSynthesis?.cancel(); } catch {}
   }
 
   async function speak(text: string) {
     setVState("speaking");
+    setSpeakNote("Getting my voice ready…");
+    setVoiceMsg("");
     try {
       const res = await fetch("/api/speak", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ text, lang: langRef.current }),
       });
-      if (!res.ok) throw new Error("speech unavailable");
-      const url = URL.createObjectURL(await res.blob());
-      await new Promise<void>((resolve, reject) => {
-        const a = new Audio(url);
-        audioRef.current = a;
-        a.onended = () => resolve();
-        a.onerror = () => reject(new Error("playback failed"));
-        a.play().catch(reject);
-      });
-      URL.revokeObjectURL(url);
-    } catch {
-      // The server voice is not available: use the browser's own voice so it still talks.
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || "The server voice is not available.");
+      }
+      const data = await res.arrayBuffer();
+      if (!playCtxRef.current) unlockAudio();
+      const ctx = playCtxRef.current!;
+      await ctx.resume();
+      const audio = await ctx.decodeAudioData(data);
+      setSpeakNote("");
       await new Promise<void>((resolve) => {
-        try {
-          const u = new SpeechSynthesisUtterance(text);
-          u.lang = LANGS.find((l) => l.id === langRef.current)?.rec ?? "en-NG";
-          u.onend = () => resolve(); u.onerror = () => resolve();
-          window.speechSynthesis.cancel(); window.speechSynthesis.speak(u);
-        } catch { resolve(); }
+        const src = ctx.createBufferSource();
+        src.buffer = audio; src.connect(ctx.destination);
+        srcRef.current = src;
+        src.onended = () => resolve();
+        src.start();
       });
+    } catch (e: any) {
+      // The server voice did not work: say why, and use the browser's own voice so it still talks.
+      setSpeakNote("");
+      setVoiceMsg(`Server voice unavailable (${String(e?.message ?? e).slice(0, 160)}). Using your browser's voice.`);
+      const ok = await speakWithBrowser(text, LANGS.find((l) => l.id === langRef.current)?.rec ?? "en-NG");
+      if (!ok) setVoiceMsg("I could not play the answer out loud on this device. Check the volume, then tap 🔊 Listen on the message.");
     } finally {
-      audioRef.current = null;
+      srcRef.current = null;
+      setSpeakNote("");
       setVState((s) => (s === "speaking" ? "idle" : s));
     }
   }
@@ -182,7 +240,7 @@ function AskInner() {
       });
       const j = await res.json();
       answer = j.answer || j.error || "Could not answer right now.";
-      setMessages((m) => [...m, { id: "a" + Date.now(), role: "assistant", content: answer, citations: j.citations || [], source: j.source, machine: !!j.machineTranslated }]);
+      setMessages((m) => [...m, { id: "a" + Date.now(), role: "assistant", content: answer, citations: j.citations || [], source: j.source, machine: !!j.machineTranslated, model: j.model || null }]);
       loadThreads(podRef.current);
     } catch {
       answer = "I could not reach the server. Check your connection and try again.";
@@ -229,6 +287,7 @@ function AskInner() {
   }
 
   async function talkOnce() {
+    unlockAudio();
     if (vState === "listening") { mic.stop(); return; }
     if (vState === "speaking") { stopSpeaking(); setVState("idle"); return; }
     const text = await listenOnce();
@@ -237,6 +296,7 @@ function AskInner() {
   }
 
   async function startLive() {
+    unlockAudio();
     liveRef.current = true; setLive(true);
     let quiet = 0;
     while (liveRef.current) {
@@ -256,7 +316,7 @@ function AskInner() {
   useEffect(() => () => { liveRef.current = false; }, []);
 
   const podName = nodes.find((n) => n.id === podId)?.name ?? "your pod";
-  const stateLabel = { idle: "Tap the microphone and talk", listening: "Listening… talk now", thinking: "Thinking…", speaking: "Speaking… tap to stop" }[vState];
+  const stateLabel = { idle: "Tap the microphone and talk", listening: "Listening… talk now", thinking: "Thinking…", speaking: speakNote || "Speaking… tap to stop" }[vState];
   const langInfo = LANGS.find((l) => l.id === language);
 
   return (
@@ -339,6 +399,7 @@ function AskInner() {
               {messages.map((m) => (
                 <div key={m.id} className={`chat-msg ${m.role}`}>
                   <div>{m.content}</div>
+                  {m.role === "assistant" && m.model && <div className="note" style={{ marginTop: 4 }}>Answered by {m.model}</div>}
                   {m.role === "assistant" && m.machine && <div className="note" style={{ marginTop: 4 }}>Machine-written in {langInfo?.label}. It may have mistakes.</div>}
                   {m.citations && m.citations.length > 0 && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
@@ -348,14 +409,14 @@ function AskInner() {
                     </div>
                   )}
                   {m.role === "assistant" && (
-                    <button type="button" className="btn small" style={{ marginTop: 8 }} onClick={() => speak(m.content)}>🔊 Listen</button>
+                    <button type="button" className="btn small" style={{ marginTop: 8 }} onClick={() => { unlockAudio(); stopSpeaking(); speak(m.content); }}>🔊 Listen</button>
                   )}
                 </div>
               ))}
               {busy && <div className="note">Looking at your pod&rsquo;s readings…</div>}
             </div>
 
-            <form onSubmit={(e) => { e.preventDefault(); askQuestion(question); }} style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <form onSubmit={(e) => { e.preventDefault(); unlockAudio(); askQuestion(question); }} style={{ display: "flex", gap: 8, marginTop: 12 }}>
               <input className="input" placeholder="Ask about the air, what happens next, or why the pod spoke…" value={question} onChange={(e) => setQuestion(e.target.value)} />
               <button type="submit" className="btn primary" disabled={busy || !question.trim() || !podId}>Ask</button>
             </form>

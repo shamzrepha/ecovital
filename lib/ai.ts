@@ -5,6 +5,7 @@ import {
   METRICS, METRIC_KEYS, ROOM_PROFILES, fmt, statusWord,
   type MetricKey, type Status, type ActionCode, type ProfileKey,
 } from "./config.ts";
+import { aiStats, textModels, ttsModels } from "./gemini-models.ts";
 import type { Trigger } from "./rules.ts";
 import type { Forecast, Summary } from "./predict.ts";
 
@@ -204,8 +205,8 @@ export function fallbackLine(ctx: AiContext): string {
 export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxTokens = 320): Promise<string> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
-  // Gemini 3.1 Flash-Lite first; the others only run if it is unavailable.
-  const models = Array.from(new Set([process.env.GEMINI_TEXT_MODEL, "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"].filter((m): m is string => !!m)));
+  // Gemini 3.1 Flash-Lite first (found by asking Google which models this key can use); the others only run if it is unavailable.
+  const models = await textModels();
 
   for (const model of models) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
@@ -225,13 +226,13 @@ export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxToken
         headers: { "content-type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(body),
       });
-      if (!res.ok) continue;
+      if (!res.ok) { aiStats.lastError = `${model}: HTTP ${res.status}`; continue; }
       const j: any = await res.json();
       const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
       const text = parts.map((p) => p.text ?? "").join(" ");
-      if (text.trim()) return text;
-    } catch {
-      // try next model
+      if (text.trim()) { aiStats.textModel = model; return text; }
+    } catch (e: any) {
+      aiStats.lastError = `${model}: ${e?.name === "AbortError" ? "timed out" : e?.message ?? e}`;   // try next model
     } finally {
       clearTimeout(timer);
     }
@@ -245,7 +246,7 @@ export async function geminiAudioToText(buf: Buffer, mime: string, lang?: string
   if (!key) throw new Error("GEMINI_API_KEY is not set");
   const hint = lang && LANGS[lang] ? LANGS[lang].label : "English";
   const instruction = `Transcribe this recording exactly as it was spoken. The speaker is most likely using ${hint}, but may mix English, Nigerian Pidgin, Igbo, Yoruba or Hausa. Write the words in the language they were spoken. Return only the spoken words, with no quotes, labels or notes. If nobody is speaking, return nothing.`;
-  const models = Array.from(new Set([process.env.GEMINI_TEXT_MODEL, "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"].filter((m): m is string => !!m)));
+  const models = await textModels();
   let lastErr = "no model answered";
   for (const model of models) {
     const ctl = new AbortController();
@@ -262,6 +263,7 @@ export async function geminiAudioToText(buf: Buffer, mime: string, lang?: string
       if (!res.ok) { lastErr = `${model} ${res.status}`; continue; }
       const j: any = await res.json();
       const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
+      aiStats.sttModel = model;
       return parts.map((p) => p.text ?? "").join(" ").replace(/^["'\s]+|["'\s]+$/g, "").trim();
     } catch (e: any) {
       lastErr = `${model} ${e?.name === "AbortError" ? "timed out" : e?.message ?? e}`;
@@ -713,13 +715,12 @@ function toMono24k(buf: Buffer, mime?: string): Buffer {
 }
 
 /** Documented Gemini speech route (generateContent with an AUDIO response). Returns 16-bit mono PCM at 24 kHz. */
-async function synthesizeStandard(text: string): Promise<Buffer> {
+async function synthesizeStandard(text: string, model: string): Promise<Buffer> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
-  const model = process.env.GEMINI_TTS_STD_MODEL || "gemini-2.5-flash-preview-tts";
   const voice = process.env.GEMINI_VOICE || "Kore";
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 12000);
+  const timer = setTimeout(() => ctl.abort(), 11000);
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST", signal: ctl.signal,
@@ -743,18 +744,28 @@ async function synthesizeStandard(text: string): Promise<Buffer> {
   }
 }
 
-/** Returns 16-bit mono PCM at 24 kHz. Tries the documented route first, then the older one. Throws if both fail. */
+/** Returns 16-bit mono PCM at 24 kHz. Tries the newest speech models this key can use, then the older route. Throws with every reason if all fail. */
 export async function synthesize(rawText: string, lang?: string): Promise<Buffer> {
   const text = (lang && LANGS[lang]?.tts ? LANGS[lang].tts : "") + rawText;
-  try {
-    return await synthesizeStandard(text);
-  } catch (first) {
+  const errors: string[] = [];
+  for (const model of (await ttsModels()).slice(0, 2)) {
     try {
-      return await synthesizeInteractions(text);
-    } catch (second) {
-      throw new Error(`${(first as Error).message}; then ${(second as Error).message}`.slice(0, 400));
+      const pcm = await synthesizeStandard(text, model);
+      aiStats.ttsModel = model;
+      return pcm;
+    } catch (e: any) {
+      errors.push(`${model}: ${e?.name === "AbortError" ? "timed out" : String(e?.message ?? e).slice(0, 160)}`);
     }
   }
+  try {
+    const pcm = await synthesizeInteractions(text);
+    aiStats.ttsModel = process.env.GEMINI_TTS_MODEL || "interactions";
+    return pcm;
+  } catch (e: any) {
+    errors.push(`interactions: ${String(e?.message ?? e).slice(0, 120)}`);
+  }
+  aiStats.lastError = errors.join("; ");
+  throw new Error(aiStats.lastError.slice(0, 500));
 }
 
 async function synthesizeInteractions(text: string): Promise<Buffer> {

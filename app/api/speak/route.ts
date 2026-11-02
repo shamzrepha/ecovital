@@ -30,7 +30,9 @@ export async function POST(req: Request) {
     return new Response(new Uint8Array(wav), {
       headers: { "content-type": "audio/wav", "content-length": String(wav.length), "cache-control": "private, no-store" },
     });
-  } catch (e) {
-    return errorResponse(e);
+  } catch (e: any) {
+    const msg = String(e?.message ?? e);
+    if (/Sign in/.test(msg)) return errorResponse(e);
+    return NextResponse.json({ ok: false, error: `The server voice failed. ${msg}`.slice(0, 400) }, { status: 502 });
   }
 }
