@@ -56,3 +56,42 @@ This zip is the full repository (without `node_modules`, `.next` and `.git`). Th
 - File: `firmware/ecovital_pod/ecovital_pod.ino` plus `logo.h`, `welcome.h`, `clips.h` in the same folder. Arduino-ESP32 core 3.x. Tools > Partition Scheme > Minimal SPIFFS (1.9MB APP with OTA).
 - The owner flashes it once over USB. After that, updates come from the Admin page.
 - Not yet verified on hardware: compile on every core version, OTA end to end, voice clip quality.
+
+---
+
+# Round 2: Nigerian-language voice and a live Voice Center
+
+Already in the repo (do not rebuild): a per-user language setting (`en-NG`, `ig`, `yo`, `ha`), Gemini text translation in `lib/ai.ts` (`translatedText`, `translateFallback`), Gemini speech in `lib/ai.ts` (`synthesize`), event audio at `/api/tts/<eventId>`, the Ask page (`/api/ask`, `answerPodQuestion`), and pod speech through the ingest reply (`speak.eventId`).
+
+Be honest in the UI and docs: machine-translated text and synthetic speech in Igbo, Yoruba, Hausa and Pidgin can be wrong. Keep the existing "Machine translated" badge until a native speaker has reviewed the wording. Do not claim medical benefits. Dust and air stay relative indexes.
+
+## A. Pod voice in Igbo and Pidgin (needs the pod online)
+
+1. Add Nigerian Pidgin, language code `pcm`, to the language list in `app/settings/page.tsx`, `app/api/user/route.ts`, `lib/ai.ts` types and the eval suite.
+2. Make language **per pod**: add `language text` to `pods` (default: the owner's user language), editable on the pod page and in `updatePodSettings`. `ingest` must use the pod's language when it writes the line. The pod itself plays whatever audio the server gives it, so no firmware change is needed.
+3. Prompt rules for `pcm`: short everyday Nigerian Pidgin ("Dust don plenty for here. Open window or put fan on."). One sentence, same advice actions as English (`open_window`, `fan`, `ac`, `water`, `close_window`). Keep numbers and units as in English.
+4. Add `translateFallback` strings for `pcm` for every trigger, so Pidgin still works with no Gemini key.
+5. **Speech quality check (must do before the pitch):** generate the same line in `en-NG`, `pcm`, `ig`, `yo`, `ha` with the current Gemini TTS model and play each one to a native speaker.
+   - If a language sounds wrong or unintelligible, do not ship it silently. Options, in order: (a) have the pod and web play the English voice with the translated text shown on screen; (b) route that language to a dedicated TTS (for Igbo, Meta MMS-TTS `facebook/mms-tts-ibo` is one candidate to evaluate; confirm it exists and its licence before using it) behind an env flag; (c) keep that language text-only.
+   - Record the result per language in `README.md`.
+6. The pod's 15 offline clips stay English. Say so on the pod page: "Offline alerts are in English; other languages need Wi-Fi."
+7. Eval suite: keep the existing Igbo scenario passing and add one for `pcm`.
+
+## B. Voice Center (talk to EcoVital, it talks back)
+
+New page `/voice` (add to the nav and bottom bar), plus `POST /api/voice`.
+
+1. UI: pod picker, language picker (English, Pidgin, Igbo, Yoruba, Hausa), a large push-to-talk mic button (hold or tap to start, tap to stop), a stop-speaking button, and a running transcript where each answer shows its source badges (Measured / Estimated) and a Machine translated badge when not English. Typed input stays available. Clear states: mic permission denied, no speech heard, offline, server error.
+2. Speech to text: record with `MediaRecorder` (webm/opus or mp4 on Safari), send to `/api/voice` as raw audio (limit 4 MB, about 60 s). Do not rely on the browser `SpeechRecognition` API for Igbo or Pidgin; it does not cover them. On the server, let Gemini transcribe and answer in one call using the audio input, with the chosen language as a hint. If the transcript is empty or low confidence, say so and ask the user to repeat; never invent a question.
+3. Answer: reuse `answerPodQuestion` (grounded in the pod's real readings, events and forecasts, with citations). Reply in the chosen language. Refuse medical claims and ug/m3 or ppm claims as the Ask page already does.
+4. Voice out: return the answer text plus audio (same `synthesize` path as events; cache by hash). Play it in the browser; show a captions line while it plays. Respect the user's mute setting.
+5. "Say it on the pod" button: queues the answer as a spoken event for the pod so the physical pod speaks it on its next check-in (about 15 s). Respect pod mute and quiet hours.
+6. Live streaming (nice to have, after the above works): use the Gemini Live API with short-lived tokens issued by `/api/voice/token`, never expose `GEMINI_API_KEY` to the browser.
+7. Privacy: audio is not stored; keep only the transcript in `chat_messages`. Rate limit `/api/voice` per user.
+8. Tests: audio too large or empty returns 4xx; answers carry citations; language falls back to English when unsupported; no key exposed in client bundles.
+
+## C. Definition of done for Round 2
+
+- A pod set to Pidgin speaks a Pidgin line after a real event, or clearly falls back to English audio with Pidgin text.
+- Voice Center answers a spoken question about the live pod and speaks the reply, in at least English and Pidgin end to end.
+- Per-language speech quality results are written down. `npm test` and `npx tsc --noEmit` pass.
