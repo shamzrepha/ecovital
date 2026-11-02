@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useState } from "react";
+import { speakText, stopSpeaking, useSpeechInput } from "@/components/useSpeech";
 
 const SUGGESTED_QUESTIONS = [
   "Why did the pod speak earlier today?",
@@ -20,6 +21,14 @@ function AskInner() {
   const [messages, setMessages] = useState<any[]>([]);
   const [question, setQuestion] = useState("");
   const [busy, setBusy] = useState(false);
+  const [lang, setLang] = useState("en-NG");
+  const [readAloud, setReadAloud] = useState(false);
+  const speech = useSpeechInput((text) => { setQuestion(text); askQuestion(text); }, lang);
+
+  useEffect(() => {
+    try { setReadAloud(localStorage.getItem("ecovital-ask-read") === "1"); setLang(localStorage.getItem("ecovital-ask-lang") || "en-NG"); } catch { /* storage unavailable */ }
+    return () => stopSpeaking();
+  }, []);
 
   const loadHistory = useCallback(async (id: string) => {
     const [nRes, cRes] = await Promise.all([
@@ -54,6 +63,7 @@ function AskInner() {
         body: JSON.stringify({ podId, question: q }),
       });
       const j = await res.json();
+      if (readAloud && (j.answer || j.error)) speakText(String(j.answer || j.error), lang);
       setMessages([
         ...optimistic,
         {
@@ -135,14 +145,55 @@ function AskInner() {
             >
               <input
                 className="input"
-                placeholder="Ask about dust, air index, temperature, humidity, or why the pod spoke..."
-                value={question}
+                placeholder={speech.listening ? "Listening... speak now" : "Ask about dust, air index, temperature, humidity, or why the pod spoke..."}
+                value={speech.listening && speech.interim ? speech.interim : question}
                 onChange={(e) => setQuestion(e.target.value)}
               />
+              <button
+                type="button"
+                className={`btn${speech.listening ? " primary" : ""}`}
+                aria-label={speech.listening ? "Stop listening" : "Ask by voice"}
+                aria-pressed={speech.listening}
+                disabled={busy || !speech.supported}
+                title={speech.supported ? "Ask by voice" : "This browser has no speech input. Use Chrome or type."}
+                onClick={() => { stopSpeaking(); speech.listening ? speech.stop() : speech.start(); }}
+              >
+                {speech.listening ? "■ Stop" : "🎤 Speak"}
+              </button>
               <button type="submit" className="btn primary" disabled={busy || !question.trim()}>
                 Ask
               </button>
             </form>
+
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 10 }}>
+              <label className="note" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                Voice language
+                <select
+                  className="select"
+                  style={{ width: "auto" }}
+                  value={lang}
+                  onChange={(e) => { setLang(e.target.value); try { localStorage.setItem("ecovital-ask-lang", e.target.value); } catch { /* ignore */ } }}
+                >
+                  <option value="en-NG">English (Nigeria), also for Pidgin</option>
+                  <option value="ha-NG">Hausa</option>
+                  <option value="yo-NG">Yoruba</option>
+                  <option value="ig-NG">Igbo</option>
+                </select>
+              </label>
+              <label className="note" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={readAloud}
+                  onChange={(e) => { setReadAloud(e.target.checked); if (!e.target.checked) stopSpeaking(); try { localStorage.setItem("ecovital-ask-read", e.target.checked ? "1" : "0"); } catch { /* ignore */ } }}
+                />
+                Read answers aloud
+              </label>
+            </div>
+            {!speech.supported && (
+              <div className="note" style={{ marginTop: 8 }}>This browser has no speech input. Open the app in Chrome, or type your question.</div>
+            )}
+            {speech.error && <div className="note" role="alert" style={{ marginTop: 8, color: "var(--bad)" }}>{speech.error}</div>}
+            <div className="note" style={{ marginTop: 6 }}>Speech is recognised by your browser. Hausa, Yoruba and Igbo recognition depends on the browser and may not be available; if it fails, use English or type.</div>
 
             <div style={{ marginTop: 14 }}>
               <div className="note" style={{ marginBottom: 6 }}>Suggested questions (click to test):</div>
