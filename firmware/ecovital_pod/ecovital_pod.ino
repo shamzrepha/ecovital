@@ -754,7 +754,7 @@ int testClip = 0;
 enum { ST_OK = 0, ST_WATCH_H = 1, ST_BAD_H = 2, ST_WATCH_L = 3, ST_BAD_L = 4 };
 struct Lim { float wH, bH, wL, bL, hyst; };
 //                       watchHigh badHigh watchLow badLow  hysteresis
-static const Lim LIM[4] = { {35,  65,  NAN, NAN, 3.0f},    // 0 dust
+static Lim LIM[4] = { {35,  65,  NAN, NAN, 3.0f},    // 0 dust
                             {NAN, NAN, 70,  45,  3.0f},    // 1 air index (low is bad)
                             {30,  36,  16,  NAN, 0.5f},    // 2 temperature
                             {68,  82,  30,  NAN, 2.0f} };  // 3 humidity
