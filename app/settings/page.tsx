@@ -5,7 +5,7 @@ import { METRICS, METRIC_KEYS, type MetricKey } from "@/lib/config";
 export default function SettingsPage() {
   const [name, setName] = useState("Shamaryah");
   const [email, setEmail] = useState("shamaryah@futo.edu.ng");
-  const [language, setLanguage] = useState<"en-NG" | "ig" | "yo" | "ha">("en-NG");
+  const [language, setLanguage] = useState<"en-NG" | "pcm" | "ig" | "yo" | "ha">("en-NG");
   const [voice, setVoice] = useState("Kore");
   const [voiceSpeed, setVoiceSpeed] = useState<"slow" | "normal" | "fast">("normal");
   const [quietStart, setQuietStart] = useState(22);
@@ -120,13 +120,14 @@ export default function SettingsPage() {
                   value={language}
                   onChange={(e) => setLanguage(e.target.value as any)}
                 >
-                  <option value="en-NG">Nigerian English (Default — spoken &amp; text)</option>
-                  <option value="ig">Igbo (Spoken English + Machine-translated Igbo text)</option>
-                  <option value="yo">Yoruba (Spoken English + Machine-translated Yoruba text)</option>
-                  <option value="ha">Hausa (Spoken English + Machine-translated Hausa text)</option>
+                  <option value="en-NG">English (Nigeria)</option>
+                  <option value="pcm">Naija Pidgin (pod speaks Pidgin)</option>
+                  <option value="ig">Igbo (pod speaks Igbo)</option>
+                  <option value="yo">Yoruba (pod speaks Yoruba)</option>
+                  <option value="ha">Hausa (pod speaks Hausa)</option>
                 </select>
                 <span className="note">
-                  Local language text translations are clearly marked <b>Machine translated</b> until reviewed by a native speaker.
+                  This is the default for all your pods. You can choose a different language for one pod on its page. Pidgin, Igbo, Yoruba and Hausa are <b>machine-written</b> and may have mistakes.
                 </span>
               </div>
 

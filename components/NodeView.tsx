@@ -42,6 +42,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
   const [roomProfile, setRoomProfile] = useState<RoomProfileKey>("classroom");
   const [volume, setVolume] = useState(80);
   const [mute, setMute] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<string>("");
   const [weights, setWeights] = useState<Record<MetricKey, number>>({ dust: 35, air: 35, temp: 15, hum: 15 });
   const [threshDraft, setThreshDraft] = useState<Record<string, any>>({});
   const [saveMsg, setSaveMsg] = useState("");
@@ -82,6 +83,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
     setRoomProfile((ps?.roomProfile as RoomProfileKey) || "classroom");
     setVolume(ps?.volume ?? 80);
     setMute(Boolean(ps?.mute));
+    setVoiceLang(ps?.voiceLang ?? "");
     if (ps?.scoreWeights) setWeights(ps.scoreWeights);
     if (data.effectiveConfigs) setThreshDraft(data.effectiveConfigs);
   }, [data]);
@@ -115,6 +117,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
           volume,
           mute,
           scoreWeights: weights,
+          voiceLang: voiceLang || null,
           ...extra,
         }),
       });
@@ -421,6 +424,18 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                         value={volume}
                         onChange={(e) => setVolume(Number(e.target.value))}
                       />
+                    </div>
+                    <div className="form-row">
+                      <label htmlFor="pod-lang">Language the pod speaks (when online)</label>
+                      <select id="pod-lang" className="select" value={voiceLang} onChange={(e) => setVoiceLang(e.target.value)}>
+                        <option value="">Use my account language</option>
+                        <option value="en-NG">English</option>
+                        <option value="pcm">Naija Pidgin</option>
+                        <option value="ig">Igbo</option>
+                        <option value="yo">Yoruba</option>
+                        <option value="ha">Hausa</option>
+                      </select>
+                      <span className="note">Pidgin, Igbo, Yoruba and Hausa are machine-written and may have mistakes. When the pod is offline it uses its built-in English clips.</span>
                     </div>
                     <div className="form-row" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
                       <input

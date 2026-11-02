@@ -114,7 +114,7 @@ export async function getNodeDetail(id: string, rangeKey: string) {
 
   const dev = await sql`
     SELECT d.id, d.name, d.location, d.lat, d.lng, d.simulated, d.meta, d.state,
-           p.claimed_by, p.profile, p.volume, p.muted, p.nickname, p.weights, p.share_token,
+           p.claimed_by, p.profile, p.volume, p.muted, p.nickname, p.weights, p.share_token, p.voice_lang,
            t.version AS target_fw,
            (extract(epoch from d.last_seen) * 1000)::float8 AS last_seen,
            (extract(epoch from d.created_at) * 1000)::float8 AS created
@@ -248,6 +248,7 @@ export async function getNodeDetail(id: string, rangeKey: string) {
       targetFwVersion: (d.target_fw as string) ?? null,
       claimedBy: (d.claimed_by as string) ?? null,
       claimCode: (d.meta as any)?.claim ?? null,
+      voiceLang: (d.voice_lang as string) ?? null,
     },
     range: { key: RANGES[rangeKey] ? rangeKey : "1h", ms: range.ms, label: range.label },
     latest,

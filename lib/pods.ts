@@ -350,6 +350,7 @@ export async function updatePodSettings(
     resetThresholds?: boolean;
     lat?: number | null;
     lng?: number | null;
+    voiceLang?: string | null;
   },
 ) {
   const sql = await db();
@@ -376,6 +377,10 @@ export async function updatePodSettings(
     const la = patch.lat === null ? null : Number(patch.lat), lo = patch.lng === null ? null : Number(patch.lng);
     if (la !== null && lo !== null && (!(la >= -90 && la <= 90) || !(lo >= -180 && lo <= 180))) throw new Error("That location is not valid.");
     await sql`UPDATE pods SET lat = ${la}, lng = ${lo} WHERE device_id = ${deviceId}`;
+  }
+  if (patch.voiceLang !== undefined) {
+    const vl = patch.voiceLang && ["en-NG", "pcm", "ig", "yo", "ha"].includes(patch.voiceLang) ? patch.voiceLang : null;
+    await sql`UPDATE pods SET voice_lang = ${vl} WHERE device_id = ${deviceId}`;
   }
   if (effProfile !== undefined) {
     await sql`UPDATE pods SET profile = ${effProfile} WHERE device_id = ${deviceId}`;

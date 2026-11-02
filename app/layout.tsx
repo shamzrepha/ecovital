@@ -3,6 +3,7 @@ import "./globals.css";
 import "./site.css";
 import "./polish.css";
 import "./forecast.css";
+import "./voice.css";
 import AppShell from "@/components/AppShell";
 
 export const metadata: Metadata = {

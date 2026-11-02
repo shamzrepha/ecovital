@@ -15,7 +15,7 @@ export interface AiContext {
   statuses: Partial<Record<MetricKey, Status>>;
   forecasts: Partial<Record<MetricKey, Forecast>>;
   profile?: string;
-  language?: string; // "en-NG" | "ig" | "yo" | "ha"
+  language?: string; // "en-NG" | "pcm" | "ig" | "yo" | "ha"
 }
 
 export interface GeneratedLine {
@@ -75,6 +75,26 @@ const LOCAL_TRANSLATIONS: Record<string, Record<string, string>> = {
     "recovered": "Komai ya daidaita yanzu. Muna cikin koshin lafiya.",
   },
 };
+
+LOCAL_TRANSLATIONS.pcm = {
+  "hum-low": "Di air dey dry well well. Drink water, or put bowl of water inside di room.",
+  "hum-high": "Di air don too wet. Open window or put fan make di moisture comot.",
+  "temp-high": "Heat don too much. Put fan or open window make air fit enter.",
+  "temp-low": "Cold dey. Close di window make di room warm.",
+  "dust-high": "Dust plenty for air. Close window and wipe di dusty tins with wet cloth.",
+  "air-low": "Di air no fresh. Open window make fresh air enter, and check say smoke no dey.",
+  "recovered": "Everything don correct now. We dey safe.",
+};
+
+/** Languages the app can write and speak. Igbo, Yoruba, Hausa and Pidgin are machine-written and say so. */
+export const LANGS: Record<string, { label: string; prompt: string; tts: string; machine: boolean; rec: string }> = {
+  "en-NG": { label: "English", prompt: "clear, warm Nigerian English", tts: "", machine: false, rec: "en-NG" },
+  pcm: { label: "Naija Pidgin", prompt: "friendly, simple Nigerian Pidgin English (Naija Pidgin)", tts: "Say this warmly in a Nigerian Pidgin English accent: ", machine: true, rec: "en-NG" },
+  ig: { label: "Igbo", prompt: "simple Igbo (use the English word when unsure of an Igbo one)", tts: "Say this warmly in Igbo: ", machine: true, rec: "ig-NG" },
+  yo: { label: "Yoruba", prompt: "simple Yoruba (use the English word when unsure of a Yoruba one)", tts: "Say this warmly in Yoruba: ", machine: true, rec: "yo-NG" },
+  ha: { label: "Hausa", prompt: "simple Hausa (use the English word when unsure of a Hausa one)", tts: "Say this warmly in Hausa: ", machine: true, rec: "ha-NG" },
+};
+export const normLang = (l?: string | null): string => (l && LANGS[l] ? l : "en-NG");
 
 export function inferAction(t: Trigger): ActionCode {
   if (t.kind === "recovered") return "none";
@@ -136,7 +156,7 @@ export function compactContext(ctx: AiContext) {
 }
 
 const SYSTEM = `You are EcoVital, a friendly classroom and home air-monitoring pod in Nigeria that speaks out loud to everyday people (teachers, parents, students, and families).
-Return JSON: {"line":"...","tags":["measured"],"action":"open_window|fan|ac|water|close_window|none","translatedText":"optional translation if language is ig/yo/ha"}
+Return JSON: {"line":"...","tags":["measured"],"action":"open_window|fan|ac|water|close_window|none","translatedText":"the same advice written in the requested language when language is pcm (Nigerian Pidgin), ig, yo or ha; leave it out for en-NG"}
 Hard rules for "line":
 - At most 32 words, warm, natural, everyday spoken English (Nigerian English default), no lists, no emojis, no markdown, and no technical jargon.
 - Put practical, easy-to-follow action FIRST or immediately with the reading so anyone in the room knows what to do.
@@ -219,6 +239,39 @@ export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxToken
   throw new Error("Gemini text request failed");
 }
 
+/** Turns a short recording (WAV) into text with Gemini. Handles English, Pidgin, Igbo, Yoruba and Hausa. */
+export async function geminiAudioToText(buf: Buffer, mime: string, lang?: string): Promise<string> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error("GEMINI_API_KEY is not set");
+  const hint = lang && LANGS[lang] ? LANGS[lang].label : "English";
+  const instruction = `Transcribe this recording exactly as it was spoken. The speaker is most likely using ${hint}, but may mix English, Nigerian Pidgin, Igbo, Yoruba or Hausa. Write the words in the language they were spoken. Return only the spoken words, with no quotes, labels or notes. If nobody is speaking, return nothing.`;
+  const models = Array.from(new Set([process.env.GEMINI_TEXT_MODEL, "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"].filter((m): m is string => !!m)));
+  let lastErr = "no model answered";
+  for (const model of models) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 12000);
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST", signal: ctl.signal,
+        headers: { "content-type": "application/json", "x-goog-api-key": key },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: instruction }, { inlineData: { mimeType: mime.split(";")[0] || "audio/wav", data: buf.toString("base64") } }] }],
+          generationConfig: { temperature: 0, maxOutputTokens: 300 },
+        }),
+      });
+      if (!res.ok) { lastErr = `${model} ${res.status}`; continue; }
+      const j: any = await res.json();
+      const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
+      return parts.map((p) => p.text ?? "").join(" ").replace(/^["'\s]+|["'\s]+$/g, "").trim();
+    } catch (e: any) {
+      lastErr = `${model} ${e?.name === "AbortError" ? "timed out" : e?.message ?? e}`;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error(lastErr);
+}
+
 function parseAiOutput(raw: string, ctx: AiContext): GeneratedLine {
   const defaultAction = inferAction(ctx.trigger);
   const defaultTags = inferTags(ctx.trigger);
@@ -295,12 +348,20 @@ export interface AskInput {
   forecasts: Partial<Record<MetricKey, { predicted: number; horizonMin: number; confidence: string; trend: string }>>;
   /** The room forecast (estimates), including outside weather and red flags. */
   prediction?: any;
+  /** Earlier messages in this chat, oldest first. */
+  history?: { role: "user" | "assistant"; text: string }[];
+  /** Language to answer in. */
+  language?: string;
+  /** Set when the new message is just a short yes/no to the assistant's last question. */
+  followUp?: { answer: "yes" | "no"; question: string };
 }
 
 export interface AskOutput {
   answer: string;
   citations: string[];
   source: "gemini" | "template";
+  language?: string;
+  machineTranslated?: boolean;
 }
 
 const ASK_SYSTEM = `You are Ask EcoVital, a friendly helper inside an air monitor app. You talk like a kind, clear person explaining things to someone who has never heard of sensors. Your people are teachers, parents, students and clinic staff.
@@ -318,7 +379,8 @@ Rules for every answer:
 6. Say whether a number was measured right now or is an estimate of what comes next, and give the time window for past readings.
 7. The pod cannot switch fans or windows on by itself. Advice such as "open a window" is for the person to do.
 8. The JSON may include "prediction": the pod's forecast for the next hour (estimates), the outside weather, and red flags. Use it for questions about what will happen, why a reading is moving, or whether the weather matters. Always call forecast numbers estimates ("it looks like", "may"), give the time (for example "in about 30 minutes"), and explain a red flag simply. If "outsideWeather" says it is not available, say the outside weather is not known because the pod has no location set, and tell them they can set it on the pod's page.
-9. Keep it short: 3 to 5 sentences, no lists, no markdown, no emojis. You may end with one short follow-up question.`;
+9. Keep it short: 3 to 5 sentences, no lists, no markdown, no emojis. You may end with one short follow-up question.
+10. You are in a conversation. Short messages such as "yes", "no", "ok", "tell me more" or "why" answer YOUR previous message, so use the conversation so far and carry on from it. Never treat them as a new topic.`;
 
 function describeReadingPlainly(latest: Partial<Record<MetricKey, number | null>>): string {
   const bits: string[] = [];
@@ -399,14 +461,40 @@ export async function answerPodQuestion(
     };
   }
 
+  const lang = normLang(input.language);
   try {
-    const prompt = `User question: ${input.question}\nRoom & Sensor Data (JSON):\n${JSON.stringify(input)}`;
-    const raw = await geminiText(prompt, ASK_SYSTEM, 600);
+    const { history, followUp, ...data } = input;
+    const convo = (history ?? []).slice(-8).map((m) => `${m.role === "user" ? "User" : "You"}: ${m.text}`).join("\n");
+    const prompt =
+      (convo ? `Conversation so far:\n${convo}\n\n` : "") +
+      `New message from the user: ${input.question}\n` +
+      (followUp ? `(This is a short reply to your last question: "${followUp.question}". They said "${followUp.answer}". Carry on from that question.)\n` : "") +
+      `Room & Sensor Data (JSON):\n${JSON.stringify({ ...data, question: undefined })}`;
+    const raw = await geminiText(prompt, `${ASK_SYSTEM}\n11. Reply in ${LANGS[lang].prompt}. Keep any numbers exactly as given.`, 700);
     const cleaned = raw.replace(/[*_`#]/g, "").trim();
     if (cleaned.length > 10) {
-      return { answer: cleaned, citations, source: "gemini" };
+      return { answer: cleaned, citations, source: "gemini", language: lang, machineTranslated: LANGS[lang].machine };
     }
   } catch { /* fall back to friendly grounded answer */ }
+
+  // A bare yes/no with no AI available: move the conversation on instead of treating it as a new question.
+  if (input.followUp) {
+    if (input.followUp.answer === "no") {
+      return { answer: "No problem. Ask me anything else about your room whenever you like.", citations: [], source: "template", language: "en-NG" };
+    }
+    const bits: string[] = [];
+    const plain = describeReadingPlainly(input.latest);
+    if (plain) bits.push(`Right now in ${input.deviceName} (Measured): ${plain}.`);
+    const p = input.prediction;
+    if (p && !p.stale) {
+      bits.push(`${p.headline} (estimate).`);
+      if (p.redFlags?.[0]) bits.push(`${p.redFlags[0].title}. ${p.redFlags[0].explanation}`);
+      if (p.suggestion && p.suggestion !== "No action needed right now.") bits.push(p.suggestion);
+      citations.push("room forecast (estimate)");
+    }
+    bits.push("Is there anything else you would like to know?");
+    return { answer: bits.join(" "), citations: Array.from(new Set(citations)), source: "template", language: "en-NG" };
+  }
 
   // Friendly, plain-English fallback answer for non-technical users
   const parts: string[] = [];
@@ -656,7 +744,8 @@ async function synthesizeStandard(text: string): Promise<Buffer> {
 }
 
 /** Returns 16-bit mono PCM at 24 kHz. Tries the documented route first, then the older one. Throws if both fail. */
-export async function synthesize(text: string): Promise<Buffer> {
+export async function synthesize(rawText: string, lang?: string): Promise<Buffer> {
+  const text = (lang && LANGS[lang]?.tts ? LANGS[lang].tts : "") + rawText;
   try {
     return await synthesizeStandard(text);
   } catch (first) {

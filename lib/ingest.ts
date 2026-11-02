@@ -103,7 +103,7 @@ export async function ingest(
   await sql`INSERT INTO pods (device_id, nickname) VALUES (${id}, ${info.name ?? id}) ON CONFLICT (device_id) DO NOTHING`;
 
   // Load pod settings, firmware target, and threshold overrides
-  const podRows = await sql`SELECT claimed_by, profile, volume, muted, nickname, device_token, token_delivered, (extract(epoch from sos_at) * 1000)::float8 AS sos_ms FROM pods WHERE device_id = ${id}`;
+  const podRows = await sql`SELECT claimed_by, profile, volume, muted, nickname, device_token, token_delivered, voice_lang, (extract(epoch from sos_at) * 1000)::float8 AS sos_ms FROM pods WHERE device_id = ${id}`;
   const podRow = podRows[0] ?? { profile: "classroom", volume: 100, muted: false };
   const profile: string = podRow.profile ?? "classroom";
 
@@ -236,6 +236,7 @@ export async function ingest(
         if (userPrefs.language) userLang = String(userPrefs.language);
       }
     }
+    if (podRow.voice_lang) userLang = String(podRow.voice_lang);   // a language chosen for this pod wins
 
     for (let i = 0; i < triggers.length; i++) {
       const t = triggers[i];
@@ -268,6 +269,8 @@ export async function ingest(
         value: t.value, prevStatus: t.prevStatus, crossing: t.crossing ?? null,
         last2min: summaries, forecast: forecasts[t.metric] ?? null, aiError: aiError ?? null,
         action, tags, translatedText: translatedText ?? null, language: userLang, machineTranslated, profile,
+        // What the pod actually says out loud: the chosen language when we have it, otherwise English.
+        spokenText: userLang !== "en-NG" && translatedText ? translatedText : null,
       };
       const sev = t.kind === "alert" ? (t.status.startsWith("bad") ? 2 : 1) : 0;
       const ins = await sql`INSERT INTO events (device_id, ts, kind, metric, status, severity, message, spoken, spoken_flag, source, data)

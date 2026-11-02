@@ -19,7 +19,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
   try {
     const sql = await db();
-    const rows = await sql`SELECT device_id, spoken, audio_b64 FROM events WHERE id = ${eventId}`;
+    const rows = await sql`SELECT device_id, spoken, audio_b64, data->>'spokenText' AS spoken_text, data->>'language' AS lang FROM events WHERE id = ${eventId}`;
     if (!rows.length || !rows[0].spoken) return NextResponse.json({ error: "No spoken line for this event" }, { status: 404 });
 
     // Only the pod that spoke (with its own key) or the signed-in owner of that pod may hear this audio.
@@ -34,7 +34,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     if (rows[0].audio_b64) {
       pcm = Buffer.from(rows[0].audio_b64 as string, "base64");
     } else {
-      pcm = await synthesize(rows[0].spoken as string);
+      pcm = rows[0].spoken_text
+        ? await synthesize(rows[0].spoken_text as string, rows[0].lang as string)
+        : await synthesize(rows[0].spoken as string);
       await sql`UPDATE events SET audio_b64 = ${pcm.toString("base64")} WHERE id = ${eventId}`;
     }
     const out = wav ? makeWav(pcm) : pcm;

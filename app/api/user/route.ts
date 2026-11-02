@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
     const me = await requireUser(req);
     const body = await req.json();
     const name = String(body.name || me.name).trim().slice(0, 60) || me.name;
-    const language = ["en-NG", "ig", "yo", "ha"].includes(body.language) ? body.language : "en-NG";
+    const language = ["en-NG", "pcm", "ig", "yo", "ha"].includes(body.language) ? body.language : "en-NG";
     const voice = String(body.voice || "Kore");
     const voiceSpeed = ["slow", "normal", "fast"].includes(body.voiceSpeed) ? body.voiceSpeed : "normal";
     const quietStartHour = Math.max(0, Math.min(23, Number(body.quietStart ?? 22)));

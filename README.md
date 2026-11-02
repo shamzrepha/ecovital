@@ -28,6 +28,12 @@ EcoVital pods (ESP32, dust + gas + temperature/humidity sensors, speaker) upload
 
 `lib/forecast-ml.ts` trains a small ridge regression per reading and per horizon (+10, +30, +60 min) on the pod's last 7 days. Inputs are the rate of change over 5, 15 and 60 minutes, distance from the usual level, time of day, and (when the pod has a location) outside temperature, its expected change, humidity and rain chance from Open-Meteo. The model is used only if it beats "no change" and a damped-trend guess on held-out data; otherwise the better guess is used and labelled. Red flags (for example a room warming while it cools outside) are rule-based. The Ask assistant receives the same forecast. Everything forecast is labelled Estimate. A pod needs a location (set on the dashboard) to get weather.
 
+## Voice and languages
+
+- **Ask** keeps each conversation as a chat (New chat, earlier chats, delete), and passes the recent messages to the model, so "yes" or "why?" carries on from the last answer.
+- **Voice center** on the Ask page: tap the microphone, or start a live conversation (it listens, answers out loud, then listens again). Recordings are turned into text by Gemini, so English, Pidgin, Igbo, Yoruba and Hausa work in any browser; without a Gemini key it falls back to the browser's own speech recognition (Chrome, Edge). Answers are spoken with Gemini speech and fall back to the browser voice.
+- **Pod language:** each pod can speak English, Naija Pidgin, Igbo, Yoruba or Hausa while it is online (set on the pod's page, or as the account default). The English line stays on screen. Pidgin, Igbo, Yoruba and Hausa are machine-written, so they are labelled as such, and the pod uses its built-in English clips when offline. Speech quality for Igbo, Yoruba and Hausa has not been checked by a native speaker.
+
 ## Honesty rules
 
 - Dust and air are **relative indexes (0–100)**, never shown as µg/m³ or ppm.
