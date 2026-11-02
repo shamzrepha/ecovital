@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "2.1"
+#define FW_VERSION "2.2"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -201,6 +201,7 @@ int ringCount() { return rCount; }
 // ---------- NETWORK STATE (shown in the header) ----------
 volatile uint8_t netState = 0;          // 0 no Wi-Fi, 1 Wi-Fi but not uploading, 2 uploading OK
 volatile bool speaking = false;
+unsigned long audioQuietUntil = 0;   // sensors are ignored while the speaker plays (its current makes the readings jump)
 volatile uint32_t lastOkMs = 0;
 volatile int lastEventId = 0;
 volatile bool replayRequested = false;
@@ -1836,7 +1837,11 @@ void loop() {
   handleSerial();
   handleButton(now);
 
-  if (now - lastPulse >= 10) {
+  if (speaking) audioQuietUntil = now + 1500;     // speaker current shakes the supply: skip sensor readings during sound and 1.5 s after
+  bool audioQuiet = (int32_t)(now - audioQuietUntil) < 0;
+  if (audioQuiet) { dustSumMv = 0; mqSumMv = 0; sampleN = 0; }   // throw away anything half-collected
+
+  if (!audioQuiet && now - lastPulse >= 10) {
     lastPulse = now;
     takePulse();
   }
