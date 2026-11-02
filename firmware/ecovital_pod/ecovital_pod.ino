@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "1.9"
+#define FW_VERSION "2.0"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -204,6 +204,8 @@ volatile bool speaking = false;
 volatile uint32_t lastOkMs = 0;
 volatile int lastEventId = 0;
 volatile bool replayRequested = false;
+volatile bool restartReq = false;       // set by an app command
+volatile uint32_t wifiDrops = 0;       // how many times Wi-Fi was lost since power-up
 
 // ---------- RING GEOMETRY ----------
 #define RING_BOX 40
@@ -465,11 +467,11 @@ void updateHeader(unsigned long now) {
 
 extern bool apActive;
 String lastIpStr = "";
-void drawFooter() {                                 // bottom line: device ID when online, an IP address when not, and readings saved for later
+void drawFooter() {                                 // bottom line: pairing code when online, an IP address when not, and readings saved for later
   bool on = WiFi.status() == WL_CONNECTED;
   if (on) lastIpStr = WiFi.localIP().toString();
   String shown;
-  if (on) shown = String(deviceId);                                              // sealed pods cannot press BOOT, so the ID is always visible
+  if (on) shown = String("Code ") + String(claimCode);                           // sealed pods cannot press BOOT, so the pairing code is always visible
   else if (apActive) shown = WiFi.softAPIP().toString();                         // setup mode: the address to open on your phone
   else if (lastIpStr.length()) shown = lastIpStr;                                // reconnecting: the last address it had
   else shown = "Disconnected";
@@ -1378,6 +1380,9 @@ void handleExtras(const String& r) {
   if (r.indexOf("\"mute\":") >= 0 && m != muted) { muted = m; prefs.putBool("muted", m); }
   char ver[24], url[220];
   char tok[64];
+  if (r.indexOf("\"cmd\":\"identify\"") >= 0) { beepRequest = 3; infoUntil = millis() + 15000; infoDrawnAt = 0; Serial.println("[cmd] find this pod"); }
+  else if (r.indexOf("\"cmd\":\"calibrate\"") >= 0) { calibrateReq = true; beepRequest = 1; Serial.println("[cmd] recalibrate"); }
+  else if (r.indexOf("\"cmd\":\"restart\"") >= 0) { restartReq = true; Serial.println("[cmd] restart"); }
   if (r.indexOf("\"sos\":true") >= 0) { sosRequest = true; Serial.println("[sos] alarm requested from the app"); }
   char nm[40];
   if (jsonStr(r, "name", nm, sizeof(nm)) && nm[0] && strcmp(nm, deviceName) != 0) {   // the app renamed this pod
@@ -1525,15 +1530,29 @@ void appendField(char* buf, size_t cap, size_t& pos, const char* key, const Samp
 }
 
 // returns the speech event id (>0) if the server wants us to speak, 0 if not, -1 on failure
+const char* resetReasonStr() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    default: return "other";
+  }
+}
+
 int postBatch(const Sample* batch, int n) {
-  static char body[BATCH * 96 + 520];
+  static char body[BATCH * 96 + 720];
   size_t cap = sizeof(body), pos = 0;
   uint32_t nowMs = millis();
   pos += snprintf(body + pos, cap - pos,
                   "{\"deviceId\":\"%s\",\"name\":\"%s\",\"location\":\"%s\",\"lat\":%.4f,\"lng\":%.4f,"
-                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s,\"readings\":[",
+                  "\"fw\":\"%s\",\"mac\":\"%s\",\"claim\":\"%s\",\"rssi\":%d,\"uptimeS\":%lu,\"mqReady\":%s,\"heap\":%lu,\"rst\":\"%s\",\"drops\":%lu,\"dhtOk\":%s,\"readings\":[",
                   DEVICE_ID, DEVICE_NAME, DEVICE_LOC, DEVICE_LAT, DEVICE_LNG, FW_VERSION, macStr, claimCode,
-                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false");
+                  WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false",
+                  (unsigned long)ESP.getFreeHeap(), resetReasonStr(), (unsigned long)wifiDrops, dhtFailed ? "false" : "true");
   for (int i = 0; i < n; i++) {
     pos += snprintf(body + pos, cap - pos, "%s{\"ageMs\":%lu", i ? "," : "", (unsigned long)(nowMs - batch[i].ms));
     appendField(body, cap, pos, "dust", batch[i], 0, 1);
@@ -1577,19 +1596,23 @@ int postBatch(const Sample* batch, int n) {
 
 void netTask(void*) {
   uint32_t lastTry = 0, lastUpload = 0;
+  bool wasUp = false;
   uint32_t waitMs = UPLOAD_EVERY_MS;
   for (;;) {
     serviceAudio();
+    if (restartReq) { delay(800); ESP.restart(); }
     portalTick();
     if (!wifiBegun) { WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true); WiFi.begin(WIFI_SSID, WIFI_PASS); wifiBegun = true; lastTry = millis(); }
 
     if (WiFi.status() != WL_CONNECTED) {
       netState = 0;
+      if (wasUp) { wasUp = false; wifiDrops++; }
       if (millis() - lastTry > 20000) { lastTry = millis(); if (cfgSsid.length()) { WiFi.disconnect(); WiFi.begin(WIFI_SSID, WIFI_PASS); } }
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
     }
     onWifiUp();
+    wasUp = true;
     if (netState == 0) netState = 1;
 
     if (replayRequested && lastEventId > 0) { replayRequested = false; playSpeech(lastEventId); }

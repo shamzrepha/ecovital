@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { db, iso } from "./db.ts";
 import {
-  METRIC_KEYS, METRICS, effectiveMetricCfg, fmt,
+  METRIC_KEYS, METRICS, classify, effectiveMetricCfg, fmt,
   type MetricKey, type ThresholdOverride,
 } from "./config.ts";
 import { generateInsightText, type InsightStats } from "./ai.ts";
@@ -351,6 +351,9 @@ export async function updatePodSettings(
     lat?: number | null;
     lng?: number | null;
     voiceLang?: string | null;
+    quietStart?: number | null;
+    quietEnd?: number | null;
+    tzMin?: number | null;
   },
 ) {
   const sql = await db();
@@ -377,6 +380,12 @@ export async function updatePodSettings(
     const la = patch.lat === null ? null : Number(patch.lat), lo = patch.lng === null ? null : Number(patch.lng);
     if (la !== null && lo !== null && (!(la >= -90 && la <= 90) || !(lo >= -180 && lo <= 180))) throw new Error("That location is not valid.");
     await sql`UPDATE pods SET lat = ${la}, lng = ${lo} WHERE device_id = ${deviceId}`;
+  }
+  if (patch.quietStart !== undefined || patch.quietEnd !== undefined) {
+    const hour = (x: number | null | undefined) => (x === null || x === undefined || !Number.isFinite(Number(x)) ? null : Math.max(0, Math.min(23, Math.round(Number(x)))));
+    const qs = hour(patch.quietStart), qe = hour(patch.quietEnd);
+    const tz = patch.tzMin === null || patch.tzMin === undefined ? null : Math.max(-720, Math.min(840, Math.round(Number(patch.tzMin))));
+    await sql`UPDATE pods SET quiet_start = ${qs}, quiet_end = ${qe}, tz_min = COALESCE(${tz}, tz_min) WHERE device_id = ${deviceId}`;
   }
   if (patch.voiceLang !== undefined) {
     const vl = patch.voiceLang && ["en-NG", "pcm", "ig", "yo", "ha"].includes(patch.voiceLang) ? patch.voiceLang : null;
@@ -665,6 +674,47 @@ export async function getTypicalPatterns(deviceId: string): Promise<{
   return { hours, notes };
 }
 
+// ---------- Time in the comfortable range ----------
+export interface Comfort { overall: number | null; dust: number | null; air: number | null; temp: number | null; hum: number | null; hours: number }
+
+export async function computeComfort(deviceId: string, now = Date.now()): Promise<{ last24h: Comfort; last7d: Comfort }> {
+  const sql = await db();
+  const pr = await sql`SELECT profile FROM pods WHERE device_id = ${deviceId}`;
+  const profile = (pr[0]?.profile as string) || "classroom";
+  const ov = await sql`SELECT metric, watch_high, bad_high, watch_low, bad_low FROM thresholds_override WHERE pod = ${deviceId}`;
+  const custom: Partial<Record<MetricKey, ThresholdOverride>> = {};
+  for (const r of ov) {
+    const k = r.metric as MetricKey;
+    if (METRIC_KEYS.includes(k)) custom[k] = { watchHigh: num(r.watch_high), badHigh: num(r.bad_high), watchLow: num(r.watch_low), badLow: num(r.bad_low) };
+  }
+  const cfg = {} as Record<MetricKey, ReturnType<typeof effectiveMetricCfg>>;
+  for (const k of METRIC_KEYS) cfg[k] = effectiveMetricCfg(k, profile, custom);
+  const rows = await sql`
+    SELECT (floor(extract(epoch from ts) / 300) * 300 * 1000)::float8 AS t,
+           avg(dust)::float8 AS dust, avg(air)::float8 AS air, avg(temp)::float8 AS temp, avg(hum)::float8 AS hum
+    FROM readings WHERE device_id = ${deviceId} AND ts > ${iso(now - 7 * 86_400_000)}::timestamptz
+    GROUP BY 1 ORDER BY 1`;
+  const calc = (since: number): Comfort => {
+    const ok: Record<MetricKey, number> = { dust: 0, air: 0, temp: 0, hum: 0 }, n: Record<MetricKey, number> = { dust: 0, air: 0, temp: 0, hum: 0 };
+    let all = 0, allN = 0, buckets = 0;
+    for (const r of rows) {
+      if (Number(r.t) < since) continue;
+      buckets++;
+      let allOk = true, any = false;
+      for (const k of METRIC_KEYS) {
+        const v = num(r[k]);
+        if (v === null) continue;
+        any = true; n[k]++;
+        if (classify(k, v, "ok", cfg[k]) === "ok") ok[k]++; else allOk = false;
+      }
+      if (any) { allN++; if (allOk) all++; }
+    }
+    const pct = (a: number, b: number) => (b >= 3 ? Math.round((a / b) * 100) : null);
+    return { overall: pct(all, allN), dust: pct(ok.dust, n.dust), air: pct(ok.air, n.air), temp: pct(ok.temp, n.temp), hum: pct(ok.hum, n.hum), hours: +((buckets * 5) / 60).toFixed(1) };
+  };
+  return { last24h: calc(now - 86_400_000), last7d: calc(now - 7 * 86_400_000) };
+}
+
 // ---------- Daily & Weekly AI Insight Cards + Compare Yesterday vs Today (section 5.2 #8 & #9) ----------
 export async function getInsightsAndComparison(deviceId: string) {
   const sql = await db();
@@ -756,6 +806,7 @@ export async function getInsightsAndComparison(deviceId: string) {
 
   const dailyInsight = await generateInsightText(dailyStats);
   const patterns = await getTypicalPatterns(deviceId);
+  const comfort = await computeComfort(deviceId, now);
 
   return {
     deviceId,
@@ -767,5 +818,6 @@ export async function getInsightsAndComparison(deviceId: string) {
     },
     comparison,
     patterns,
+    comfort,
   };
 }

@@ -43,6 +43,10 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
   const [volume, setVolume] = useState(80);
   const [mute, setMute] = useState(false);
   const [voiceLang, setVoiceLang] = useState<string>("");
+  const [quietOn, setQuietOn] = useState(false);
+  const [quietStart, setQuietStart] = useState(22);
+  const [quietEnd, setQuietEnd] = useState(6);
+  const [cmdMsg, setCmdMsg] = useState("");
   const [weights, setWeights] = useState<Record<MetricKey, number>>({ dust: 35, air: 35, temp: 15, hum: 15 });
   const [threshDraft, setThreshDraft] = useState<Record<string, any>>({});
   const [saveMsg, setSaveMsg] = useState("");
@@ -84,6 +88,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
     setVolume(ps?.volume ?? 80);
     setMute(Boolean(ps?.mute));
     setVoiceLang(ps?.voiceLang ?? "");
+    if (ps?.quietStart != null && ps?.quietEnd != null) { setQuietOn(true); setQuietStart(ps.quietStart); setQuietEnd(ps.quietEnd); }
     if (ps?.scoreWeights) setWeights(ps.scoreWeights);
     if (data.effectiveConfigs) setThreshDraft(data.effectiveConfigs);
   }, [data]);
@@ -118,6 +123,9 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
           mute,
           scoreWeights: weights,
           voiceLang: voiceLang || null,
+          quietStart: quietOn ? quietStart : null,
+          quietEnd: quietOn ? quietEnd : null,
+          tzMin: -new Date().getTimezoneOffset(),
           ...extra,
         }),
       });
@@ -127,6 +135,20 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
       load();
     } catch (e: any) {
       setSaveMsg(`Error: ${e.message}`);
+    }
+  }
+
+  async function sendCommand(cmd: "identify" | "calibrate" | "restart") {
+    const warn = cmd === "calibrate" ? "Recalibrate only works well in clean, fresh air, away from smoke, dust and fumes. Continue?" : cmd === "restart" ? "Restart the pod now?" : "";
+    if (warn && !confirm(warn)) return;
+    setCmdMsg("Sending…");
+    try {
+      const res = await fetch(`/api/pods/${encodeURIComponent(id)}/command`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cmd }) });
+      const j = await res.json();
+      setCmdMsg(j.message || j.error || "Could not send.");
+      if (res.ok) load();
+    } catch {
+      setCmdMsg("Could not reach EcoVital.");
     }
   }
 
@@ -448,6 +470,19 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                         Mute spoken alerts on pod speaker (LED and screen stay active)
                       </label>
                     </div>
+                    <div className="form-row" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                      <input id="pod-quiet" type="checkbox" checked={quietOn} onChange={(e) => setQuietOn(e.target.checked)} />
+                      <label htmlFor="pod-quiet" style={{ margin: 0 }}>Quiet hours: keep the pod silent (the SOS alarm still sounds)</label>
+                    </div>
+                    {quietOn && (
+                      <div className="form-row" style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <label htmlFor="pod-qs" style={{ margin: 0 }}>From</label>
+                        <select id="pod-qs" className="select" style={{ width: "auto" }} value={quietStart} onChange={(e) => setQuietStart(Number(e.target.value))}><option value={0}>00:00</option><option value={1}>01:00</option><option value={2}>02:00</option><option value={3}>03:00</option><option value={4}>04:00</option><option value={5}>05:00</option><option value={6}>06:00</option><option value={7}>07:00</option><option value={8}>08:00</option><option value={9}>09:00</option><option value={10}>10:00</option><option value={11}>11:00</option><option value={12}>12:00</option><option value={13}>13:00</option><option value={14}>14:00</option><option value={15}>15:00</option><option value={16}>16:00</option><option value={17}>17:00</option><option value={18}>18:00</option><option value={19}>19:00</option><option value={20}>20:00</option><option value={21}>21:00</option><option value={22}>22:00</option><option value={23}>23:00</option></select>
+                        <label htmlFor="pod-qe" style={{ margin: 0 }}>to</label>
+                        <select id="pod-qe" className="select" style={{ width: "auto" }} value={quietEnd} onChange={(e) => setQuietEnd(Number(e.target.value))}><option value={0}>00:00</option><option value={1}>01:00</option><option value={2}>02:00</option><option value={3}>03:00</option><option value={4}>04:00</option><option value={5}>05:00</option><option value={6}>06:00</option><option value={7}>07:00</option><option value={8}>08:00</option><option value={9}>09:00</option><option value={10}>10:00</option><option value={11}>11:00</option><option value={12}>12:00</option><option value={13}>13:00</option><option value={14}>14:00</option><option value={15}>15:00</option><option value={16}>16:00</option><option value={17}>17:00</option><option value={18}>18:00</option><option value={19}>19:00</option><option value={20}>20:00</option><option value={21}>21:00</option><option value={22}>22:00</option><option value={23}>23:00</option></select>
+                        <span className="note">Your local time. Alerts are still recorded in the timeline.</span>
+                      </div>
+                    )}
                     <button className="btn small" onClick={() => savePodSettings()} style={{ marginBottom: 14 }}>
                       Apply Volume &amp; Mute
                     </button>
@@ -469,6 +504,12 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                           http://{dev.id}.local/
                         </a>
                       </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                        <button type="button" className="btn small" onClick={() => sendCommand("identify")}>📍 Find this pod</button>
+                        <button type="button" className="btn small" onClick={() => sendCommand("calibrate")}>🧪 Recalibrate sensors</button>
+                        <button type="button" className="btn small" onClick={() => sendCommand("restart")}>⟳ Restart pod</button>
+                      </div>
+                      {cmdMsg && <p className="note" role="status" style={{ margin: "0 0 8px" }}>{cmdMsg}</p>}
                       <button className="btn small danger" onClick={unclaimThisPod}>
                         Unclaim / Remove pod from account
                       </button>
@@ -756,7 +797,12 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                   <th>Rejected sensor values</th>
                   <td>{sys.invalidLastHour > 0 ? `${sys.invalidLastHour} readings had a bad value` : "None"}</td>
                 </tr>
-                {sys.rssi !== null && <tr><th>Wi-Fi signal</th><td>{sys.rssi} dBm</td></tr>}
+                {sys.rssi !== null && <tr><th>Wi-Fi signal</th><td>{sys.rssi <= -75 ? "Weak" : sys.rssi <= -67 ? "Fair" : sys.rssi <= -55 ? "Good" : "Excellent"} ({sys.rssi} dBm)</td></tr>}
+                {sys.uptimeS != null && <tr><th>Running for</th><td>{sys.uptimeS < 3600 ? `${Math.max(1, Math.round(sys.uptimeS / 60))} min` : sys.uptimeS < 172800 ? `${Math.round(sys.uptimeS / 3600)} hours` : `${Math.round(sys.uptimeS / 86400)} days`}</td></tr>}
+                {sys.rst && <tr><th>Last restart</th><td>{({ power: "Power was connected", restart: "Restarted from the app or on purpose", crash: "The pod crashed and recovered", watchdog: "The pod stopped responding and reset itself", brownout: "The power dipped. Check the charger or USB port", other: "Unknown reason" } as Record<string, string>)[sys.rst] ?? sys.rst}</td></tr>}
+                {sys.drops != null && <tr><th>Wi-Fi drops since start</th><td>{sys.drops === 0 ? "None" : sys.drops}</td></tr>}
+                {sys.heap != null && <tr><th>Free memory</th><td>{Math.round(sys.heap / 1024)} KB {sys.heap < 40000 ? "(low)" : ""}</td></tr>}
+                {sys.dhtOk === false && <tr><th>Temperature sensor</th><td>Not responding. Check its wiring.</td></tr>}
                 {sys.fw && <tr><th>Firmware</th><td>v{sys.fw} {ps?.targetFwVersion && ps.targetFwVersion !== sys.fw ? `→ OTA v${ps.targetFwVersion} queued` : "(up to date)"}</td></tr>}
                 {dev.id !== "demo-node" && sys.mqReady === false && <tr><th>Gas sensor</th><td>Warming up (first 90 s)</td></tr>}
               </tbody>
@@ -770,7 +816,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                   </li>
                 ))}
                 <li>
-                  <b>Estimates:</b> A straight-line least-squares trend over the last 10 minutes compared against a &ldquo;no change&rdquo; baseline. It is not a trained ML model.
+                  <b>Estimates:</b> Early warnings use a straight-line trend over the last 10 minutes, checked against a &ldquo;no change&rdquo; baseline. The forecast panel uses a small model trained on this pod&rsquo;s own history (plus outside weather when a location is set), and is used only when it beats simple guesses. All of it is estimated, not measured.
                 </li>
                 <li>
                   <b>Serial commands (115200 baud):</b> <code>help</code>, <code>status</code>, <code>code</code>, <code>test</code>, <code>vol 0-100</code>, <code>mute</code>, <code>unmute</code>, <code>wifi-reset</code>.
@@ -976,7 +1022,7 @@ function Accuracy({ acc }: { acc: any }) {
         </table>
       )}
       <p className="note" style={{ marginTop: 8 }}>
-        Average error in the sensor&rsquo;s own units. Forecast is a linear trend over recent readings, not a trained ML model.
+        Average error in the sensor&rsquo;s own units. This compares the 10-minute early-warning trend with &ldquo;no change&rdquo;.
       </p>
       <p className="note">
         Early warnings, last 7 days:{" "}

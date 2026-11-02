@@ -18,6 +18,45 @@ import { METRICS, METRIC_KEYS, type MetricKey } from "@/lib/config";
 
 const CAP: Record<MetricKey, string> = { dust: "Dust", air: "Air", temp: "Temp", hum: "Hum" };
 
+function ComfortCard({ comfort }: { comfort: any }) {
+  if (!comfort) return null;
+  const rows: [string, string][] = [["last24h", "Last 24 hours"], ["last7d", "Last 7 days"]];
+  const names: [string, string][] = [["air", "Air"], ["dust", "Dust"], ["temp", "Temperature"], ["hum", "Humidity"]];
+  const tone = (p: number | null) => (p === null ? "var(--rule)" : p >= 85 ? "var(--good)" : p >= 60 ? "var(--watch)" : "var(--bad)");
+  return (
+    <section className="card" style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <h2 style={{ margin: 0 }}>How much of the time the room was comfortable</h2>
+        <span className="tag-measured">Measured</span>
+      </div>
+      <p className="note" style={{ margin: "6px 0 12px" }}>The share of time each reading stayed inside its comfortable range (your pod&rsquo;s own limits).</p>
+      <div className="grid-2">
+        {rows.map(([key, label]) => {
+          const c = comfort[key];
+          return (
+            <div key={key}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                <b>{label}</b>
+                <span style={{ fontSize: 26, fontWeight: 700 }}>{c?.overall == null ? "--" : `${c.overall}%`}<small style={{ fontSize: 12, color: "var(--ink2)", fontWeight: 400 }}> all four comfortable</small></span>
+              </div>
+              {names.map(([k, n]) => (
+                <div key={k} style={{ display: "grid", gridTemplateColumns: "96px 1fr 42px", gap: 8, alignItems: "center", margin: "6px 0", fontSize: 13.5 }}>
+                  <span>{n}</span>
+                  <span style={{ height: 8, borderRadius: 99, background: "var(--panel-alt)", overflow: "hidden" }}>
+                    <span style={{ display: "block", height: "100%", width: `${c?.[k] ?? 0}%`, background: tone(c?.[k] ?? null) }} />
+                  </span>
+                  <span style={{ textAlign: "right" }}>{c?.[k] == null ? "--" : `${c[k]}%`}</span>
+                </div>
+              ))}
+              <div className="note">{c?.hours ? `Based on ${c.hours} hours of readings.` : "Not enough readings yet."}</div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function InsightsInner() {
   const searchParams = useSearchParams();
   const initialPod = searchParams.get("pod") || "";
@@ -86,6 +125,8 @@ function InsightsInner() {
         <div className="skeleton">Calculating insights and patterns...</div>
       ) : (
         <>
+          <ComfortCard comfort={data?.comfort} />
+
           {/* Daily & Pattern Summary Cards */}
           <div className="grid-2" style={{ marginBottom: 18 }}>
             <section className="card" style={{ marginBottom: 0 }}>

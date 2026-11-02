@@ -36,9 +36,18 @@ export interface IngestResult {
   name?: string;
   lim?: (number | null)[];
   sos?: boolean;
+  cmd?: "identify" | "calibrate" | "restart";
 }
 
 const FRESH_MS = 90_000;
+
+/** Is it inside this pod's quiet hours? Hours are 0-23 in the owner's local time (tzMin = minutes ahead of UTC). */
+export function inQuietHours(nowMs: number, start: number | null | undefined, end: number | null | undefined, tzMin: number | null | undefined): boolean {
+  if (start === null || start === undefined || end === null || end === undefined || start === end) return false;
+  const local = new Date(nowMs + Number(tzMin ?? 60) * 60_000);
+  const h = local.getUTCHours() + local.getUTCMinutes() / 60;
+  return start < end ? h >= start && h < end : h >= start || h < end;
+}
 
 /** Compare dotted versions such as "1.10" and "1.9". Returns >0 when a is newer than b. */
 export function compareVersions(a: string, b: string): number {
@@ -103,7 +112,7 @@ export async function ingest(
   await sql`INSERT INTO pods (device_id, nickname) VALUES (${id}, ${info.name ?? id}) ON CONFLICT (device_id) DO NOTHING`;
 
   // Load pod settings, firmware target, and threshold overrides
-  const podRows = await sql`SELECT claimed_by, profile, volume, muted, nickname, device_token, token_delivered, voice_lang, (extract(epoch from sos_at) * 1000)::float8 AS sos_ms FROM pods WHERE device_id = ${id}`;
+  const podRows = await sql`SELECT claimed_by, profile, volume, muted, nickname, device_token, token_delivered, voice_lang, quiet_start, quiet_end, tz_min, cmd, (extract(epoch from cmd_at) * 1000)::float8 AS cmd_ms, (extract(epoch from sos_at) * 1000)::float8 AS sos_ms FROM pods WHERE device_id = ${id}`;
   const podRow = podRows[0] ?? { profile: "classroom", volume: 100, muted: false };
   const profile: string = podRow.profile ?? "classroom";
 
@@ -184,14 +193,23 @@ export async function ingest(
     await sql`UPDATE pods SET sos_at = NULL WHERE device_id = ${id}`;
   }
 
+  let cmd: IngestResult["cmd"];
+  if (podRow.cmd) {
+    if (podRow.cmd_ms && now - Number(podRow.cmd_ms) < 3 * 60_000 && ["identify", "calibrate", "restart"].includes(String(podRow.cmd))) cmd = String(podRow.cmd) as IngestResult["cmd"];
+    await sql`UPDATE pods SET cmd = NULL, cmd_at = NULL WHERE device_id = ${id}`;
+  }
+  // Quiet hours silence the pod's voice the same way the mute switch does. SOS still sounds.
+  const effMuted = !!podRow.muted || inQuietHours(now, podRow.quiet_start as number | null, podRow.quiet_end as number | null, podRow.tz_min as number | null);
+
   const result: IngestResult = {
     ok: true, accepted: usable.length, rejected: clean.length - usable.length, invalidFields,
     serverTime: now, events: [],
     volume: Number(podRow.volume ?? 100),
-    mute: !!podRow.muted,
+    mute: effMuted,
     ...(podRow.claimed_by && podName ? { name: podName } : {}),
     lim,
     ...(sos ? { sos: true } : {}),
+    ...(cmd ? { cmd } : {}),
     ...(otaVersion && otaUrl ? { otaVersion, otaUrl } : {}),
     ...(deviceToken ? { deviceToken } : {}),
   };
@@ -279,7 +297,7 @@ export async function ingest(
                  RETURNING id`;
       const eventId = Number(ins[0].id);
       result.events.push(eventId);
-      if (speak && spoken && !podRow.muted) {
+      if (speak && spoken && !effMuted) {
         result.speak = { eventId, text: spoken, source: source ?? "template", action, tags };
       }
 

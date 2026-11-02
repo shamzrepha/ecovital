@@ -170,6 +170,11 @@ const SCHEMA = [
   `ALTER TABLE pods ADD COLUMN IF NOT EXISTS sos_at timestamptz`,
   `ALTER TABLE pods ADD COLUMN IF NOT EXISTS lat double precision`,
   `ALTER TABLE pods ADD COLUMN IF NOT EXISTS voice_lang text`,
+  `ALTER TABLE pods ADD COLUMN IF NOT EXISTS cmd text`,
+  `ALTER TABLE pods ADD COLUMN IF NOT EXISTS cmd_at timestamptz`,
+  `ALTER TABLE pods ADD COLUMN IF NOT EXISTS quiet_start int`,
+  `ALTER TABLE pods ADD COLUMN IF NOT EXISTS quiet_end int`,
+  `ALTER TABLE pods ADD COLUMN IF NOT EXISTS tz_min int`,
   `ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS thread text NOT NULL DEFAULT 'main'`,
   `ALTER TABLE pods ADD COLUMN IF NOT EXISTS lng double precision`,
   `CREATE TABLE IF NOT EXISTS leads (

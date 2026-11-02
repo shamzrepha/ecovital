@@ -114,7 +114,7 @@ export async function getNodeDetail(id: string, rangeKey: string) {
 
   const dev = await sql`
     SELECT d.id, d.name, d.location, d.lat, d.lng, d.simulated, d.meta, d.state,
-           p.claimed_by, p.profile, p.volume, p.muted, p.nickname, p.weights, p.share_token, p.voice_lang,
+           p.claimed_by, p.profile, p.volume, p.muted, p.nickname, p.weights, p.share_token, p.voice_lang, p.quiet_start, p.quiet_end, p.tz_min,
            t.version AS target_fw,
            (extract(epoch from d.last_seen) * 1000)::float8 AS last_seen,
            (extract(epoch from d.created_at) * 1000)::float8 AS created
@@ -249,6 +249,9 @@ export async function getNodeDetail(id: string, rangeKey: string) {
       claimedBy: (d.claimed_by as string) ?? null,
       claimCode: (d.meta as any)?.claim ?? null,
       voiceLang: (d.voice_lang as string) ?? null,
+      quietStart: num(d.quiet_start),
+      quietEnd: num(d.quiet_end),
+      tzMin: num(d.tz_min),
     },
     range: { key: RANGES[rangeKey] ? rangeKey : "1h", ms: range.ms, label: range.label },
     latest,
@@ -277,6 +280,7 @@ export async function getNodeDetail(id: string, rangeKey: string) {
       readingsLastHour: Number(hour[0]?.n ?? 0), invalidLastHour: Number(hour[0]?.bad ?? 0),
       fw: (d.meta as any)?.fw ?? null, rssi: (d.meta as any)?.rssi ?? null, uptimeS: (d.meta as any)?.uptimeS ?? null,
       mqReady: (d.meta as any)?.mqReady ?? null,
+      heap: (d.meta as any)?.heap ?? null, rst: (d.meta as any)?.rst ?? null, drops: (d.meta as any)?.drops ?? null, dhtOk: (d.meta as any)?.dhtOk ?? null,
       mac: (d.meta as any)?.mac ?? null,
       claim: (d.meta as any)?.claim ?? null,
     },

@@ -34,6 +34,14 @@ EcoVital pods (ESP32, dust + gas + temperature/humidity sensors, speaker) upload
 - **Voice center** on the Ask page: tap the microphone, or start a live conversation (it listens, answers out loud, then listens again). Recordings are turned into text by Gemini, so English, Pidgin, Igbo, Yoruba and Hausa work in any browser; without a Gemini key it falls back to the browser's own speech recognition (Chrome, Edge). Answers are spoken with Gemini speech and fall back to the browser voice.
 - **Pod language:** each pod can speak English, Naija Pidgin, Igbo, Yoruba or Hausa while it is online (set on the pod's page, or as the account default). The English line stays on screen. Pidgin, Igbo, Yoruba and Hausa are machine-written, so they are labelled as such, and the pod uses its built-in English clips when offline. Speech quality for Igbo, Yoruba and Hausa has not been checked by a native speaker.
 
+## Version 2.0
+
+- **Commands from the app** (pod page): Find this pod (beep and show its code), Recalibrate sensors, Restart. They run on the pod's next check-in and expire after 3 minutes. Firmware 2.0 or newer.
+- **Quiet hours** per pod: the pod stays silent in the chosen hours (your local time). The SOS alarm still sounds. This works through the same mute switch, so any firmware 1.6 or newer respects it.
+- **Pod health** on the pod page: Wi-Fi signal in words, how long it has been running, why it last restarted (power, crash, watchdog, brownout), Wi-Fi drops, free memory, and whether the temperature sensor responds. Sent by firmware 2.0.
+- **Time in the comfortable range** on Insights: how much of the last 24 hours and 7 days each reading stayed inside its limits.
+- The pod screen shows its **pairing code** when it is on Wi-Fi, and its IP address when it is not.
+
 ## Honesty rules
 
 - Dust and air are **relative indexes (0–100)**, never shown as µg/m³ or ppm.
