@@ -40,9 +40,16 @@ export async function GET(req: NextRequest) {
     WHERE device_id = ${podId} AND user_id = ${user.id} AND thread = ${thread}
     ORDER BY ts ASC LIMIT 60`;
   return NextResponse.json({
-    messages: rows.map((r: any) => ({
-      id: Number(r.id), podId: r.device_id, role: r.role, content: r.text, citations: r.data_refs ?? [], createdAt: iso(Number(r.ts_ms)),
-    })),
+    messages: rows.map((r: any) => {
+      const refs = Array.isArray(r.data_refs) ? r.data_refs : [];
+      const meta = refs.find((x: any) => x?.label === "meta");
+      const citations = refs.filter((x: any) => x?.label !== "meta");
+      return {
+        id: Number(r.id), podId: r.device_id, role: r.role, content: r.text,
+        citations, source: meta?.source ?? null, model: meta?.model ?? null, machine: !!meta?.machine,
+        createdAt: iso(Number(r.ts_ms)),
+      };
+    }),
   });
 }
 
@@ -116,8 +123,15 @@ export async function POST(req: NextRequest) {
     });
 
     const citationChips = ans.citations.map((c) => ({ label: "Grounded source", detail: c }));
+    const metaRef = { label: "meta", source: ans.source, model: ans.source === "gemini" ? aiStats.textModel : null, machine: !!ans.machineTranslated };
     await sql`INSERT INTO chat_messages (user_id, device_id, role, text, data_refs, thread)
-              VALUES (${user.id}, ${podId}, 'assistant', ${ans.answer}, ${JSON.stringify(citationChips)}::jsonb, ${thread})`;
+              VALUES (${user.id}, ${podId}, 'assistant', ${ans.answer}, ${JSON.stringify([metaRef, ...citationChips])}::jsonb, ${thread})`;
+
+    // Record in ai_logs
+    await sql`INSERT INTO ai_logs (device_id, kind, inputs, output, source)
+              VALUES (${podId}, 'ask', ${JSON.stringify({ question, thread, language })}::jsonb,
+                      ${JSON.stringify({ answer: ans.answer, error: ans.source === "template" ? (aiStats.lastError || "template fallback") : null })}::jsonb,
+                      ${ans.source})`.catch(() => {});
 
     return NextResponse.json({
       answer: ans.answer, citations: citationChips, source: ans.source, thread,

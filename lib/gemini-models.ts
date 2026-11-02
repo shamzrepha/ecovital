@@ -7,7 +7,7 @@ let cache: { at: number; models: ModelInfo[] | null } | null = null;
 const TTL = 6 * 3600_000;
 
 /** What the app last used, so the app and the admin page can show it. */
-export const aiStats = { textModel: "", ttsModel: "", sttModel: "", lastError: "" };
+export const aiStats = { textModel: "", ttsModel: "", sttModel: "", lastError: "", lastOkAt: 0 };
 
 export function resetModelCache() { cache = null; }
 

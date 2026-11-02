@@ -399,7 +399,18 @@ function AskInner() {
               {messages.map((m) => (
                 <div key={m.id} className={`chat-msg ${m.role}`}>
                   <div>{m.content}</div>
-                  {m.role === "assistant" && m.model && <div className="note" style={{ marginTop: 4 }}>Answered by {m.model}</div>}
+                  {m.role === "assistant" && (
+                    <>
+                      {m.source && m.source !== "gemini" && (
+                        <div style={{ marginTop: 4 }}>
+                          <span className="chip warn" style={{ background: "color-mix(in srgb, var(--brand-rust, #e65100) 15%, transparent)", color: "var(--brand-rust, #e65100)", fontWeight: 600 }}>
+                            AI unavailable, using built-in advice
+                          </span>
+                        </div>
+                      )}
+                      {m.model && m.source === "gemini" && <div className="note" style={{ marginTop: 4 }}>Answered by {m.model}</div>}
+                    </>
+                  )}
                   {m.role === "assistant" && m.machine && <div className="note" style={{ marginTop: 4 }}>Machine-written in {langInfo?.label}. It may have mistakes.</div>}
                   {m.citations && m.citations.length > 0 && (
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>

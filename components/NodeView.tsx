@@ -272,6 +272,15 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
           </div>
         )}
 
+        {voice.blocked && (
+          <div style={{ marginBottom: 10, padding: "8px 12px", background: "color-mix(in srgb, var(--brand-leaf) 15%, transparent)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontSize: 13.5, fontWeight: 500 }}>Browser blocked automatic audio playback</span>
+            <button className="btn small primary" onClick={voice.unblock} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              🔊 Tap to hear
+            </button>
+          </div>
+        )}
+
         {lastSpoken ? (
           <div className={`said ${lastSpoken.kind}`} style={{ margin: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
             <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4, flexWrap: "wrap" }}>
@@ -284,6 +293,11 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                 <span className="tag-measured">Measured trigger</span>
               )}
               {lastSpoken.action && <span className="chip">Action: {lastSpoken.action}</span>}
+              {lastSpoken.source !== "gemini" && (
+                <span className="chip warn" style={{ background: "color-mix(in srgb, var(--brand-rust, #e65100) 15%, transparent)", color: "var(--brand-rust, #e65100)", fontWeight: 600 }}>
+                  AI unavailable, using built-in advice
+                </span>
+              )}
             </div>
             <q>{lastSpoken.spoken}</q>
             {lastSpoken.translatedText && lastSpoken.machineTranslated && (
@@ -725,7 +739,11 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
                     ) : (
                       <span className="tag-measured">Measured</span>
                     )}
-                    <span className="chip">{e.source === "gemini" ? "Gemini" : "Template"}</span>
+                    {e.source === "gemini" ? (
+                      <span className="chip good">Gemini</span>
+                    ) : (
+                      <span className="chip warn" style={{ background: "color-mix(in srgb, var(--brand-rust, #e65100) 15%, transparent)", color: "var(--brand-rust, #e65100)", fontWeight: 600 }}>AI unavailable, using built-in advice</span>
+                    )}
                     {e.kind === "predictive" && e.outcome === "hit" && <span className="chip good">Came true</span>}
                     {e.kind === "predictive" && e.outcome === "miss" && <span className="chip bad">False alarm</span>}
                     {e.kind === "predictive" && !e.outcome && <span className="chip">Checking</span>}

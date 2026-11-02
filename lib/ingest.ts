@@ -9,6 +9,7 @@ import { forecast, summarise, type Forecast, type Pt, type Summary } from "./pre
 import { evaluateRules, describeTrigger, emptyState, type DeviceState, type Trigger } from "./rules.ts";
 import { validateReading, type RawReading } from "./validate.ts";
 import { generateLine, compactContext } from "./ai.ts";
+import { sendPushToUser } from "./push.ts";
 
 export interface DeviceInfo {
   id: string;
@@ -301,12 +302,27 @@ export async function ingest(
         result.speak = { eventId, text: spoken, source: source ?? "template", action, tags };
       }
 
-      // Log deduplicated notification if not in quiet hours and metric enabled
+      // Gas alarms ALWAYS bypass quiet hours!
+      const isGasAlarm = (t.metric === "air" && t.status === "bad-low") || (t.metric === "dust" && t.status === "bad-high");
       const metricEnabled = userPrefs?.metrics?.[t.metric] !== false;
-      if (speak && metricEnabled && !isQuietHour(now, userPrefs)) {
-        const title = `${devName}: ${t.kind === "recovered" ? "Back to normal" : t.kind === "predictive" ? "Early warning" : "Room alert"}`;
+      const canNotify = isGasAlarm || (speak && metricEnabled && !isQuietHour(now, userPrefs));
+
+      if (canNotify) {
+        const title = `${devName}: ${isGasAlarm ? "🚨 Gas / Severe Air Alert" : t.kind === "recovered" ? "Back to normal" : t.kind === "predictive" ? "Early warning" : "Room alert"}`;
+        const body = spoken ?? describeTrigger(t);
         await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
-                  VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${title}, ${spoken ?? describeTrigger(t)})`;
+                  VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${title}, ${body})`;
+
+        if (podRow.claimed_by) {
+          sendPushToUser({
+            userId: podRow.claimed_by,
+            title,
+            body,
+            tag: `pod-${id}`,
+            isGasAlarm,
+            data: { url: "/dashboard" },
+          }).catch(() => {});
+        }
       }
     }
   }

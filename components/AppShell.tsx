@@ -12,6 +12,7 @@ const APP_NAV = [
   { href: "/add", label: "Add pod", short: "Add", icon: "＋" },
   { href: "/insights", label: "Insights", short: "Insights", icon: "▤" },
   { href: "/ask", label: "Ask EcoVital", short: "Ask", icon: "💬" },
+  { href: "/voice", label: "Voice Center", short: "Voice", icon: "🎤" },
   { href: "/settings", label: "Settings", short: "Settings", icon: "⚙" },
 ];
 

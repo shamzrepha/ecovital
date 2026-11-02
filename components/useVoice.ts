@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // and falls back to the browser's built-in speech if that audio is not available.
 export function useVoice() {
   const [on, setOn] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  const [blockedItem, setBlockedItem] = useState<{ eventId: number; text: string } | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
@@ -15,27 +17,48 @@ export function useVoice() {
     setOn((v) => {
       const nv = !v;
       try { localStorage.setItem("ecovital-voice", nv ? "1" : "0"); } catch { /* ignore */ }
-      if (!nv) { audio.current?.pause(); try { speechSynthesis.cancel(); } catch { /* ignore */ } }
+      if (!nv) { audio.current?.pause(); try { speechSynthesis.cancel(); } catch { /* ignore */ } setBlocked(false); }
       return nv;
     });
   }, []);
 
   const play = useCallback(async (eventId: number, text: string) => {
     try { audio.current?.pause(); speechSynthesis.cancel(); } catch { /* ignore */ }
+    setBlocked(false);
     try {
       const a = new Audio(`/api/tts/${eventId}?fmt=wav`);
       audio.current = a;
       await a.play();
+      setBlockedItem(null);
       return;
-    } catch { /* fall back to built-in voice */ }
+    } catch (e: any) {
+      if (e?.name === "NotAllowedError" || String(e?.message ?? "").includes("interact") || String(e?.message ?? "").includes("user")) {
+        setBlocked(true);
+        setBlockedItem({ eventId, text });
+      }
+      /* fall back to built-in voice */
+    }
     try {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "en";
       speechSynthesis.speak(u);
-    } catch { /* no speech available */ }
+      setBlockedItem(null);
+    } catch (e: any) {
+      if (e?.name === "NotAllowedError") {
+        setBlocked(true);
+        setBlockedItem({ eventId, text });
+      }
+    }
   }, []);
 
-  return { on, toggle, play };
+  const unblock = useCallback(() => {
+    if (blockedItem) {
+      play(blockedItem.eventId, blockedItem.text);
+    }
+    setBlocked(false);
+  }, [blockedItem, play]);
+
+  return { on, toggle, play, blocked, unblock, blockedItem };
 }
 
 export function ago(now: number, t: number | null | undefined): string {

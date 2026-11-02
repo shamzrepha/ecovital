@@ -65,17 +65,73 @@ export default function SettingsPage() {
     load();
   }
 
+  function urlBase64ToUint8Array(base64String: string) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/\-/g, "+").replace(/_/g, "/");
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
   async function requestBrowserNotifications() {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      setPushStatus("Browser notifications not supported on this device.");
+    if (typeof window === "undefined" || !("Notification" in window) || !("serviceWorker" in navigator)) {
+      setPushStatus("Browser notifications or service worker not supported on this device.");
       return;
     }
-    const perm = await Notification.requestPermission();
-    setPushStatus(`Browser permission: ${perm}`);
-    if (perm === "granted") {
-      new Notification("EcoVital Alerts Enabled", {
-        body: "Dust is high in Classroom (72%). Open the windows near the corridor.",
+    try {
+      const perm = await Notification.requestPermission();
+      setPushStatus(`Browser permission: ${perm}`);
+      if (perm !== "granted") return;
+
+      const reg = await navigator.serviceWorker.ready;
+      const vapidRes = await fetch("/api/push");
+      const { vapidPublicKey } = await vapidRes.json();
+      if (!vapidPublicKey) {
+        setPushStatus("VAPID public key not configured on server.");
+        return;
+      }
+
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
       });
+
+      const saveRes = await fetch("/api/push", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(sub),
+      });
+      const saveJson = await saveRes.json();
+      if (saveJson.ok) {
+        setPushStatus("Active! Phone push alerts enabled (even with app closed).");
+      }
+    } catch (e: any) {
+      setPushStatus(`Push setup: ${e?.message ?? e}`);
+    }
+  }
+
+  async function testPushNotification() {
+    try {
+      setMsg("Sending test phone push notification...");
+      const res = await fetch("/api/push", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ testSend: true }),
+      });
+      const j = await res.json();
+      if (j.ok && j.sent > 0) {
+        setMsg("Push notification delivered to your device!");
+      } else if (j.ok && j.sent === 0) {
+        setMsg("No active push subscription found. Tap 'Enable Phone Alerts' first.");
+      } else {
+        setMsg(j.error || "Test failed");
+      }
+      load();
+    } catch (e: any) {
+      setMsg(`Test failed: ${e?.message ?? e}`);
     }
   }
 
@@ -203,7 +259,10 @@ export default function SettingsPage() {
                 Save Preferences
               </button>
               <button type="button" className="btn" onClick={requestBrowserNotifications}>
-                🔔 Enable Browser Web Push Notifications
+                🔔 Enable Phone Alerts (Web Push)
+              </button>
+              <button type="button" className="btn small" onClick={testPushNotification}>
+                📲 Send Test Phone Alert
               </button>
               <span className="note">{pushStatus}</span>
             </div>

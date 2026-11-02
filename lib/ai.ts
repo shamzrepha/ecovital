@@ -226,18 +226,26 @@ export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxToken
         headers: { "content-type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(body),
       });
-      if (!res.ok) { aiStats.lastError = `${model}: HTTP ${res.status}`; continue; }
+      if (!res.ok) {
+        const preview = (await res.text().catch(() => "")).slice(0, 200);
+        aiStats.lastError = `${model}: HTTP ${res.status}${preview ? ` - ${preview}` : ""}`;
+        continue;
+      }
       const j: any = await res.json();
       const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
       const text = parts.map((p) => p.text ?? "").join(" ");
-      if (text.trim()) { aiStats.textModel = model; return text; }
+      if (text.trim()) {
+        aiStats.textModel = model;
+        aiStats.lastOkAt = Date.now();
+        return text;
+      }
     } catch (e: any) {
-      aiStats.lastError = `${model}: ${e?.name === "AbortError" ? "timed out" : e?.message ?? e}`;   // try next model
+      aiStats.lastError = `${model}: ${e?.name === "AbortError" ? "timed out" : String(e?.message ?? e).slice(0, 200)}`;   // try next model
     } finally {
       clearTimeout(timer);
     }
   }
-  throw new Error("Gemini text request failed");
+  throw new Error(aiStats.lastError || "Gemini text request failed");
 }
 
 /** Turns a short recording (WAV) into text with Gemini. Handles English, Pidgin, Igbo, Yoruba and Hausa. */
@@ -260,13 +268,20 @@ export async function geminiAudioToText(buf: Buffer, mime: string, lang?: string
           generationConfig: { temperature: 0, maxOutputTokens: 300 },
         }),
       });
-      if (!res.ok) { lastErr = `${model} ${res.status}`; continue; }
+      if (!res.ok) {
+        const preview = (await res.text().catch(() => "")).slice(0, 200);
+        lastErr = `${model}: HTTP ${res.status}${preview ? ` - ${preview}` : ""}`;
+        aiStats.lastError = lastErr;
+        continue;
+      }
       const j: any = await res.json();
       const parts: any[] = j?.candidates?.[0]?.content?.parts ?? [];
       aiStats.sttModel = model;
+      aiStats.lastOkAt = Date.now();
       return parts.map((p) => p.text ?? "").join(" ").replace(/^["'\s]+|["'\s]+$/g, "").trim();
     } catch (e: any) {
-      lastErr = `${model} ${e?.name === "AbortError" ? "timed out" : e?.message ?? e}`;
+      lastErr = `${model}: ${e?.name === "AbortError" ? "timed out" : String(e?.message ?? e).slice(0, 200)}`;
+      aiStats.lastError = lastErr;
     } finally {
       clearTimeout(timer);
     }
@@ -302,9 +317,11 @@ function parseAiOutput(raw: string, ctx: AiContext): GeneratedLine {
         };
       }
     }
-  } catch { /* fall through to plain text parse */ }
+  } catch { /* fall through */ }
+  if (trimmed.includes("{") || trimmed.includes("}") || trimmed.length < 8) {
+    throw new Error("malformed Gemini JSON response");
+  }
   const text = clean(trimmed);
-  if (text.length < 8) throw new Error("line too short");
   const translated = translateFallback(ctx.trigger, ctx.language);
   return {
     text,
@@ -333,7 +350,7 @@ export async function generateLine(ctx: AiContext): Promise<GeneratedLine> {
       translatedText: translated,
       language: ctx.language ?? "en-NG",
       machineTranslated: !!translated,
-      error: String(e?.message ?? e).slice(0, 200),
+      error: String(aiStats.lastError || (e?.message ?? e)).slice(0, 200),
     };
   }
 }
@@ -726,7 +743,7 @@ async function synthesizeStandard(text: string, model: string): Promise<Buffer> 
       method: "POST", signal: ctl.signal,
       headers: { "content-type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({
-        contents: [{ parts: [{ text }] }],
+        contents: [{ parts: [{ text: text.startsWith("Read the following") ? text : `Read the following text aloud: ${text}` }] }],
         generationConfig: {
           responseModalities: ["AUDIO"],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } },
@@ -738,6 +755,7 @@ async function synthesizeStandard(text: string, model: string): Promise<Buffer> 
     if (!a) throw new Error("Gemini TTS response had no audio");
     const pcm = toMono24k(Buffer.from(a.data, "base64"), a.mime);
     if (pcm.length < 2000) throw new Error("Gemini TTS audio too short");
+    aiStats.lastOkAt = Date.now();
     return pcm;
   } finally {
     clearTimeout(timer);
@@ -752,6 +770,7 @@ export async function synthesize(rawText: string, lang?: string): Promise<Buffer
     try {
       const pcm = await synthesizeStandard(text, model);
       aiStats.ttsModel = model;
+      aiStats.lastOkAt = Date.now();
       return pcm;
     } catch (e: any) {
       errors.push(`${model}: ${e?.name === "AbortError" ? "timed out" : String(e?.message ?? e).slice(0, 160)}`);
@@ -760,6 +779,7 @@ export async function synthesize(rawText: string, lang?: string): Promise<Buffer
   try {
     const pcm = await synthesizeInteractions(text);
     aiStats.ttsModel = process.env.GEMINI_TTS_MODEL || "interactions";
+    aiStats.lastOkAt = Date.now();
     return pcm;
   } catch (e: any) {
     errors.push(`interactions: ${String(e?.message ?? e).slice(0, 120)}`);
@@ -771,7 +791,7 @@ export async function synthesize(rawText: string, lang?: string): Promise<Buffer
 async function synthesizeInteractions(text: string): Promise<Buffer> {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error("GEMINI_API_KEY is not set");
-  const model = process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-tts";
+  const model = process.env.GEMINI_TTS_MODEL || "gemini-2.5-flash-preview-tts";
   const voice = process.env.GEMINI_VOICE || "Kore";
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 20000);
