@@ -28,8 +28,9 @@ test("if Google cannot be asked, the order still starts with 3.1 Flash-Lite", ()
   assert.equal(pickText(null)[0], "gemini-3.1-flash-lite");
 });
 
-test("the newest speech model is chosen", () => {
+test("Gemini 2.5 Flash TTS is chosen first, newer speech models are backups", () => {
   const list = [gc("gemini-2.5-flash-preview-tts"), gc("gemini-2.5-pro-preview-tts"), gc("gemini-3.1-flash-tts-preview"), gc("gemini-2.5-flash")];
-  assert.equal(pickTts(list)[0], "gemini-3.1-flash-tts-preview");
+  assert.equal(pickTts(list)[0], "gemini-2.5-flash-preview-tts");
+  assert.ok(pickTts(list).includes("gemini-3.1-flash-tts-preview"));
   assert.deepEqual(pickTts(null), ["gemini-2.5-flash-preview-tts"]);
 });

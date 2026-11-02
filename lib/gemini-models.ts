@@ -69,7 +69,9 @@ export function pickTts(models: ModelInfo[] | null): string[] {
   const fallback = ["gemini-2.5-flash-preview-tts"];
   if (!models) return fallback;
   const tts = models.filter((m) => m.methods.includes("generateContent") && /tts/.test(m.name)).map((m) => m.name);
-  tts.sort((a, b) => version(b) - version(a) || stable(a) - stable(b) || a.localeCompare(b));
+  // Gemini 2.5 Flash TTS is the preferred voice; other speech models are backups (newest first).
+  const pref = (n: string) => (/gemini-2\.5-flash-preview-tts/.test(n) ? 0 : /gemini-2\.5-flash.*tts/.test(n) ? 1 : 2);
+  tts.sort((a, b) => pref(a) - pref(b) || version(b) - version(a) || stable(a) - stable(b) || a.localeCompare(b));
   return tts.length ? tts : fallback;
 }
 
