@@ -216,6 +216,7 @@ export async function geminiText(prompt: string, systemPrompt = SYSTEM, maxToken
       generationConfig: {
         maxOutputTokens: maxTokens,
         temperature: 0.45,
+        ...(systemPrompt.includes("Return JSON") || systemPrompt.includes("JSON:") || prompt.includes("Data (JSON):") ? { responseMimeType: "application/json" } : {}),
       },
     };
     const ctl = new AbortController();

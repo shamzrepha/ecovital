@@ -50,12 +50,13 @@ const version = (n: string) => {
 const stable = (n: string) => (/preview|exp|latest/.test(n) ? 1 : 0);   // plain names sort before preview names of the same version
 
 export function pickText(models: ModelInfo[] | null, env = process.env.GEMINI_TEXT_MODEL): string[] {
-  const fallback = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.5-flash"];
+  const fallback = ["gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-2.5-flash-lite", "gemini-2.5-flash"];
   if (!models) return Array.from(new Set([...fallback, ...(env ? [env] : [])]));
   const usable = models.filter((m) => m.methods.includes("generateContent") && /^gemini-/.test(m.name) && !/tts|image|live|embed|aqa|robotics|computer|audio|thinking|vision/.test(m.name));
   const flashLite = (v: RegExp) => usable.filter((m) => v.test(m.name) && /flash-lite/.test(m.name)).map((m) => m.name).sort((a, b) => stable(a) - stable(b) || a.length - b.length);
   const picks = [
     ...flashLite(/gemini-3\.1/),          // what the owner asked for
+    ...usable.filter((m) => /gemini-3-flash-preview/.test(m.name)).map((m) => m.name),
     ...flashLite(/gemini-3(?!\.)/),
     ...flashLite(/gemini-2\.5/),
     ...usable.filter((m) => /gemini-2\.5-flash$/.test(m.name)).map((m) => m.name),
