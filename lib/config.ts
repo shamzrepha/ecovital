@@ -348,12 +348,17 @@ export function computeRoomScore(
   if (totalW === 0) {
     return { score: null, word: "No data", level: "watch", subscores, weights, reasons: ["No recent sensor readings available."], worstMetric: null };
   }
-  const score = Math.round(weightedSum / totalW);
+  // A weighted average hides a single bad reading (gas can drop the air index to 20 while temperature, humidity and
+  // dust look fine). So the score can never be better than the worst reading by more than 10 points, and any
+  // reading in its BAD range makes the whole room Poor.
+  const average = Math.round(weightedSum / totalW);
+  const score = worstSub <= 100 ? Math.min(average, Math.round(worstSub) + 10) : average;
   if (reasons.length === 0) {
     reasons.push("All four readings are inside the comfortable range for this room profile.");
   }
-  const word = score >= 80 ? "Good" : score >= 55 ? "Fair" : "Poor";
-  const level = score >= 80 ? "good" : score >= 55 ? "watch" : "bad";
+  const anyBad = Object.entries(subscores).some(([k, sub]) => (sub as number) < 50);
+  const word = anyBad || score < 55 ? "Poor" : score >= 80 ? "Good" : "Fair";
+  const level = anyBad || score < 55 ? "bad" : score >= 80 ? "good" : "watch";
   return { score, word, level, subscores, weights, reasons, worstMetric };
 }
 
