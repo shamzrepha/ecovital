@@ -1,0 +1,11 @@
+<resources>
+    <color name="primary">#059669</color>
+    <color name="primary_dark">#047857</color>
+    <color name="emergency_red">#DC2626</color>
+    <color name="emergency_red_dark">#991B1B</color>
+    <color name="background_white">#FFFFFF</color>
+    <color name="text_dark">#0F172A</color>
+    <color name="text_muted">#64748B</color>
+    <color name="btn_stop">#B91C1C</color>
+    <color name="btn_open">#1E293B</color>
+</resources>
