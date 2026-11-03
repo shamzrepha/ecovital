@@ -1087,18 +1087,17 @@ static inline int16_t ulaw2lin(uint8_t u) {
 
 static const int16_t ADPCM_STEP[89] PROGMEM = {7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767};
 static const int8_t ADPCM_IDX[8] = {-1, -1, -1, -1, 2, 4, 6, 8};
-struct AdpcmState { int pred = 0; int idx = 0; };
-static inline int16_t adpcmNext(AdpcmState& st, uint8_t code) {   // 4-bit IMA ADPCM -> one 16-bit sample
-  int step = (int16_t)pgm_read_word(ADPCM_STEP + st.idx);
+static inline int16_t adpcmNext(int& pred, int& idx, uint8_t code) {   // 4-bit IMA ADPCM -> one 16-bit sample
+  int step = (int16_t)pgm_read_word(ADPCM_STEP + idx);
   int d = step >> 3;
   if (code & 4) d += step;
   if (code & 2) d += step >> 1;
   if (code & 1) d += step >> 2;
-  st.pred += (code & 8) ? -d : d;
-  if (st.pred > 32767) st.pred = 32767; else if (st.pred < -32768) st.pred = -32768;
-  st.idx += ADPCM_IDX[code & 7];
-  if (st.idx < 0) st.idx = 0; else if (st.idx > 88) st.idx = 88;
-  return (int16_t)st.pred;
+  pred += (code & 8) ? -d : d;
+  if (pred > 32767) pred = 32767; else if (pred < -32768) pred = -32768;
+  idx += ADPCM_IDX[code & 7];
+  if (idx < 0) idx = 0; else if (idx > 88) idx = 88;
+  return (int16_t)pred;
 }
 
 void playClip(int id) {
@@ -1111,11 +1110,11 @@ void playClip(int id) {
   uint32_t n = CLIPS[id].n;
   int16_t frames[512 * 2];
   int fi = 0;
-  AdpcmState st;
-  int16_t a = n ? adpcmNext(st, pgm_read_byte(d) & 15) : 0;
+  int apred = 0, aidx = 0;
+  int16_t a = n ? adpcmNext(apred, aidx, pgm_read_byte(d) & 15) : 0;
   for (uint32_t i = 0; i < n; i++) {
     int16_t b = a;
-    if (i + 1 < n) { uint32_t j = i + 1; uint8_t by = pgm_read_byte(d + (j >> 1)); b = adpcmNext(st, (j & 1) ? (by >> 4) : (by & 15)); }
+    if (i + 1 < n) { uint32_t j = i + 1; uint8_t by = pgm_read_byte(d + (j >> 1)); b = adpcmNext(apred, aidx, (j & 1) ? (by >> 4) : (by & 15)); }
     int16_t o[2] = { a, (int16_t)(((int32_t)a + b) / 2) };     // 12 kHz -> 24 kHz: each sample plus the midpoint
     a = b;
     for (int k = 0; k < 2; k++) {
@@ -1915,6 +1914,7 @@ void playWelcomeVoice() {
 void setup() {
   Serial.begin(115200);
   Serial.println("\n=== EcoVital cloud node ===");
+  Serial.printf("[boot] last reset reason: %s | free heap %lu\n", resetReasonStr(), (unsigned long)ESP.getFreeHeap());   // tells a power dip (brownout) from a software crash
 
   pinMode(PIN_DUST_LED, OUTPUT);
   pinMode(PIN_BTN, INPUT_PULLUP);
