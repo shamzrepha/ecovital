@@ -5,7 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 
 type Me = { id: string; email: string; name: string; role: string };
 
-const PUBLIC = (p: string) => p === "/" || p === "/login" || p === "/signup" || p.startsWith("/share/");
+const PUBLIC = (p: string) => p === "/" || p === "/login" || p === "/signup" || p === "/download" || p.startsWith("/share/");
 
 const APP_NAV = [
   { href: "/dashboard", label: "Home", short: "Home", icon: "⌂" },
@@ -88,8 +88,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <a className="nav-pill" href="/#features">Features</a>
               <a className="nav-pill" href="/#honest">What it measures</a>
               <a className="nav-pill" href="/#contact">Get pods</a>
+              <Link className="nav-pill" href="/download">📲 App</Link>
             </nav>
             <span className="spacer" />
+            <Link href="/download" className="btn small" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              📲 Get App
+            </Link>
             {themeBtn}
             {me ? (
               <Link href="/dashboard" className="btn small primary">Open app</Link>
@@ -105,6 +109,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <footer className="site-footer">
           <div className="site-footer-inner">
             <span>© {new Date().getFullYear()} EcoVital</span>
+            <Link href="/download" style={{ color: "inherit", textDecoration: "underline" }}>Download Android App</Link>
             <span>Dust and air readings are relative indexes, not µg/m³ or ppm.</span>
           </div>
         </footer>
@@ -131,6 +136,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <span className="spacer" />
+          <Link
+            href="/download"
+            className="btn small"
+            title="Download Android Companion App for Lock-Screen Siren"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+          >
+            📲 Get App
+          </Link>
           <span className="who" title={me.email}>{me.name}</span>
           {themeBtn}
           <button type="button" className="btn small" onClick={signOut}>Sign out</button>

@@ -1,5 +1,6 @@
 import webpush from "web-push";
 import { db } from "./db.ts";
+import { sendFcmToUser } from "./fcm.ts";
 
 // VAPID keys must stay the same forever: a phone subscribed with one key pair only accepts pushes signed by that pair.
 // Serverless instances restart often, so the pair comes from env (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY) or is created
@@ -85,7 +86,7 @@ export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number;
     data: opts.data || { url: "/" },
   });
 
-  for (const sub of subs) {
+    for (const sub of subs) {
     try {
       const pushSub = {
         endpoint: sub.endpoint,
@@ -102,6 +103,18 @@ export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number;
       }
     }
   }
+
+  // Also send data-only high-priority message via FCM to registered Android phones
+  const fcmCause = opts.data?.cause || (opts.isGasAlarm ? (opts.body.toLowerCase().includes("smoke") ? "smoke" : "gas") : "dust");
+  const fcmPodId = opts.data?.podId || (opts.tag ? opts.tag.replace(/^pod-/, "") : "");
+  await sendFcmToUser(opts.userId, {
+    type: opts.isGasAlarm ? "alarm" : "alert",
+    title: opts.title,
+    body: opts.body,
+    podId: fcmPodId,
+    cause: fcmCause,
+    ts: new Date().toISOString(),
+  }).catch(() => {});
 
   return { sent, failed };
 }

@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">EcoVital</string>
+    <string name="alarm_channel_name">Emergency Air Alarms</string>
+    <string name="alarm_channel_desc">Loud sirens over lock screen for smoke, gas, and hazardous air events</string>
+    <string name="alerts_channel_name">EcoVital Room Alerts</string>
+    <string name="alerts_channel_desc">Standard advisory notifications for room comfort and air changes</string>
+    <string name="stop_alarm">Stop Alarm</string>
+    <string name="open_pod">Open Pod</string>
+    <string name="offline_msg">No connection to EcoVital. Retrying…</string>
+</resources>

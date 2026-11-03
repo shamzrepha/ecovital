@@ -18,9 +18,13 @@ export default function SettingsPage() {
   });
   const [notifications, setNotifications] = useState<any[]>([]);
   const [pushStatus, setPushStatus] = useState<string>("Not enabled in this browser yet");
+  const [isAndroidApp, setIsAndroidApp] = useState(false);
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
+    if (typeof window !== "undefined" && (window as any).AndroidBridge) {
+      setIsAndroidApp(true);
+    }
     const res = await fetch("/api/user", { cache: "no-store" });
     const j = await res.json();
     if (j.user) {
@@ -134,6 +138,28 @@ export default function SettingsPage() {
       load();
     } catch (e: any) {
       setMsg(`Test failed: ${e?.message ?? e}`);
+    }
+  }
+
+  async function triggerTestAlarm() {
+    try {
+      setMsg("Triggering emergency alarm test to your Android phone...");
+      if (typeof window !== "undefined" && (window as any).AndroidBridge?.testAlarm) {
+        (window as any).AndroidBridge.testAlarm();
+      }
+      const res = await fetch("/api/fcm/test", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ podId: "settings-test" }),
+      });
+      const j = await res.json();
+      if (j.ok) {
+        setMsg(`🚨 Emergency alarm dispatched to phone! (${j.sent} device(s) notified)`);
+      } else {
+        setMsg(`Alarm test: ${j.error || "Failed"}`);
+      }
+    } catch (e: any) {
+      setMsg(`Alarm test error: ${e?.message ?? e}`);
     }
   }
 
@@ -268,6 +294,28 @@ export default function SettingsPage() {
               </button>
               <span className="note">{pushStatus}</span>
             </div>
+
+            {isAndroidApp ? (
+              <div style={{ marginTop: 16, padding: "12px 16px", borderRadius: 8, background: "#ecfdf5", border: "1px solid #10b981", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 18 }}>🟢</span>
+                  <div>
+                    <strong style={{ color: "#065f46" }}>Phone alarm: on</strong>
+                    <div style={{ fontSize: 12, color: "#047857" }}>Connected to Android native shell with emergency lock-screen siren</div>
+                  </div>
+                </div>
+                <button type="button" className="btn small danger" onClick={triggerTestAlarm}>
+                  🚨 Test Alarm Siren
+                </button>
+              </div>
+            ) : (
+              <div style={{ marginTop: 16, padding: "10px 14px", borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                <span style={{ fontSize: 13, color: "#475569" }}>
+                  Want sirens that ring over your phone's lock screen during gas/smoke alerts?
+                </span>
+                <a href="/download" className="btn small">Get EcoVital Android App</a>
+              </div>
+            )}
           </form>
 
           <section className="card">
