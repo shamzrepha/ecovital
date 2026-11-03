@@ -1,6 +1,6 @@
 // Ingest pipeline: validate -> store -> evaluate rules -> forecast -> AI voice line -> event.
 
-import { sendPush } from "@/lib/push";
+import { sendPush } from "./push.ts";
 import { db, iso, type Sql } from "./db.ts";
 import {
   METRICS, METRIC_KEYS, AI_CONTEXT_MIN, HORIZON_MIN, classify, effectiveMetricCfg,

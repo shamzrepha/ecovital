@@ -1,5 +1,5 @@
 import webpush from "web-push";
-import { db } from "@/lib/db";
+import { db } from "./db.ts";
 
 // Web Push (phone notifications that arrive even when the app is closed).
 // VAPID keys come from env (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY) or, if not set, are made once and kept in the database.
