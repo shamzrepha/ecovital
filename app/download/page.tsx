@@ -16,7 +16,7 @@ export default function DownloadPage() {
             <img src="/assets/logo.png" alt="EcoVital App Logo" style={{ width: 64, height: 64, borderRadius: 12 }} />
             <div>
               <h2 style={{ margin: 0 }}>EcoVital Native Companion</h2>
-              <div style={{ color: "#64748B", fontSize: 14 }}>Version 1.0.0 (Debug APK) • Android 8.0 to 15</div>
+              <div style={{ color: "#059669", fontSize: 14, fontWeight: 600 }}>Version 1.1.0 (Latest Release) • Android 8.0 to 15</div>
             </div>
           </div>
 
