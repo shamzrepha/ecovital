@@ -36,9 +36,9 @@ Written for the owner (Shamaryah) to hand to Antigravity. Do these in order. Kee
 3. Add per-language quality check: generate the same line in `en-NG`, `pcm`, `ig`, `yo`, `ha`, have a native speaker listen, and record the verdict. If a language sounds wrong, do not ship it silently: show the translated text and use the English voice (or an evaluated dedicated TTS for that language behind an env flag). Write the verdict per language in the Results table.
 4. Per-pod language (`pods.language`) and Nigerian Pidgin (`pcm`) are specified in `ANTIGRAVITY_TASKS.md` Round 2 section A.
 
-## 4. Real phone alerts
+## 4. Real phone alerts (BUILT, needs a real-phone test)
 
-`notifications_log` rows are written but nothing sends them. Implement Web Push as in `ANTIGRAVITY_TASKS.md` Round 3 item 1 (VAPID keys, subscribe flow, service worker `push` handler, sender), with gas alarms always allowed through quiet hours. Test on Android Chrome with the app closed.
+Web Push is now in the code: `lib/push.ts` (VAPID keys from env `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`, or made once and kept in table `push_config`), `/api/push/key|subscribe|test`, `components/PushToggle.tsx` on Settings, `push`/`notificationclick` in `public/sw.js`, and sends from `lib/ingest.ts` (gas alarm always, bad/early alerts outside quiet hours). Do not rewrite it. Test it on Android Chrome with the app closed and on an iPhone installed to the home screen, then fix only what fails. Web Push cannot play a custom looping alarm sound; it uses the phone's notification sound plus long vibration. A true ringing alarm needs a native app.
 
 ## 5. Acceptance checklist (all must be shown working on the deployed site)
 

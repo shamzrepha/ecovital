@@ -14,12 +14,14 @@ export async function GET() {
     adminKeyConfigured: !!(process.env.ADMIN_KEY || effKey),
     geminiConfigured: !!process.env.GEMINI_API_KEY,
     database: "unknown",
+    pushPhones: 0,
     contacts: [] as any[],
   };
   try {
     const sql = await db();
     const rows = await sql`SELECT device_id, result, fw, (extract(epoch from last_at) * 1000)::float8 AS t FROM pod_contact ORDER BY last_at DESC LIMIT 10`;
     out.database = "ok";
+    try { const c = await sql`SELECT count(*)::int AS n FROM push_subscriptions`; out.pushPhones = c[0].n; } catch { /* ignore */ }
     out.contacts = rows.map((r: any) => ({ deviceId: r.device_id, result: r.result, fw: r.fw, secondsAgo: Math.round((Date.now() - Number(r.t)) / 1000) }));
   } catch (e: any) {
     out.database = "error: " + String(e?.message ?? e).slice(0, 120);

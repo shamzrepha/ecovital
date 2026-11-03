@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { METRICS, METRIC_KEYS, type MetricKey } from "@/lib/config";
+import PushToggle from "@/components/PushToggle";
 
 export default function SettingsPage() {
   const [name, setName] = useState("Shamaryah");
@@ -98,6 +99,7 @@ export default function SettingsPage() {
 
       <div className="cols">
         <main>
+          <PushToggle />
           <form className="card" onSubmit={save}>
             <h2>Account, Voice &amp; Local Languages</h2>
             <div className="grid-2">

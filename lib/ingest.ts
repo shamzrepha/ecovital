@@ -1,5 +1,6 @@
 // Ingest pipeline: validate -> store -> evaluate rules -> forecast -> AI voice line -> event.
 
+import { sendPush } from "@/lib/push";
 import { db, iso, type Sql } from "./db.ts";
 import {
   METRICS, METRIC_KEYS, AI_CONTEXT_MIN, HORIZON_MIN, classify, effectiveMetricCfg,
@@ -187,6 +188,7 @@ export async function ingest(
       result.events.push(eventId);
       await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
                 VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${"ALARM " + devName + ": possible gas or fumes"}, ${msg})`;
+      await sendPush(podRow.claimed_by ?? null, { title: "ALARM " + devName + ": possible gas or fumes", body: msg, podId: id, alarm: true, tag: "ev-gas-" + id, url: "/node/" + encodeURIComponent(id) });
     }
   }
 
@@ -262,6 +264,7 @@ export async function ingest(
         const title = `${devName}: ${t.kind === "recovered" ? "Back to normal" : t.kind === "predictive" ? "Early warning" : "Room alert"}`;
         await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
                   VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${title}, ${spoken ?? describeTrigger(t)})`;
+        if (t.kind !== "recovered") await sendPush(podRow.claimed_by ?? null, { title, body: spoken ?? describeTrigger(t), podId: id, alarm: sev >= 2, tag: "ev-" + id + "-" + t.metric, url: "/node/" + encodeURIComponent(id) });
       }
     }
   }
