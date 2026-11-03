@@ -50,6 +50,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       .then((j) => live && setMe(j.user ?? null))
       .catch(() => live && setMe(null));
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+    // Auto-sync Android Companion App FCM Token
+    try {
+      const bridge = (window as any).AndroidBridge;
+      if (bridge?.getFcmToken) {
+        const token = bridge.getFcmToken();
+        if (token && typeof token === "string" && token.length > 10) {
+          fetch("/api/fcm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, platform: "android" }),
+          }).catch(() => {});
+        }
+      }
+    } catch (_) {}
     return () => { live = false; };
   }, [pathname]);
 

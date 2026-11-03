@@ -1,12 +1,15 @@
 package com.ecovital.app
 
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.media.AudioAttributes
 import android.media.RingtoneManager
 import android.os.Build
+import android.util.Log
 import android.webkit.CookieManager
 import androidx.core.app.NotificationCompat
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -20,9 +23,10 @@ import java.net.URL
 class EcoFirebaseMessagingService : FirebaseMessagingService() {
 
     companion object {
-        const val ALERTS_CHANNEL_ID = "ecovital_alerts_v1"
+        const val ALERTS_CHANNEL_ID = "ecovital_alerts_v2"
         const val SERVER_BASE_URL = "https://ecovital-phi.vercel.app"
         const val ACTION_PUSH_ALERT = "com.ecovital.app.ACTION_PUSH_ALERT"
+        private const val TAG = "EcoFCM"
 
         fun syncFcmTokenWithServer(token: String) {
             CoroutineScope(Dispatchers.IO).launch {
@@ -35,6 +39,7 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
                         requestMethod = "POST"
                         doOutput = true
                         setRequestProperty("Content-Type", "application/json")
+                        setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android; Mobile) EcoVital/1.0")
                         if (cookies.isNotEmpty()) {
                             setRequestProperty("Cookie", cookies)
                         }
@@ -47,10 +52,11 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
                         os.write(json.toByteArray(Charsets.UTF_8))
                     }
 
-                    conn.responseCode
+                    val code = conn.responseCode
+                    Log.i(TAG, "FCM token sync response: HTTP $code")
                     conn.disconnect()
                 } catch (e: Exception) {
-                    e.printStackTrace()
+                    Log.e(TAG, "Failed to sync FCM token with server", e)
                 }
             }
         }
@@ -58,6 +64,7 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
+        Log.i(TAG, "onNewToken: $token")
         val prefs = getSharedPreferences("ecovital_prefs", Context.MODE_PRIVATE)
         prefs.edit().putString("fcm_token", token).apply()
 
@@ -68,6 +75,7 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
         super.onMessageReceived(remoteMessage)
 
         val data = remoteMessage.data
+        Log.i(TAG, "onMessageReceived from: ${remoteMessage.from}, data: $data")
         if (data.isEmpty()) return
 
         val type = data["type"] ?: "alert"
@@ -91,23 +99,32 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
             e.printStackTrace()
         }
 
+        // 1. ALWAYS display a high-priority system notification with heads-up banner & sound
+        showStandardAlertNotification(title, body, podId, type == "alarm")
+
+        // 2. If it is an emergency alarm, also attempt to launch looping siren service & lock screen alert
         if (type == "alarm") {
-            // Trigger emergency siren foreground service & full-screen lock-screen alert
-            AlarmService.startAlarm(
-                context = applicationContext,
-                podId = podId,
-                podName = if (podId.isNotEmpty()) podId else "EcoVital Pod",
-                title = title,
-                cause = cause,
-                body = body
-            )
-        } else {
-            // Standard advisory room alert
-            showStandardAlertNotification(title, body, podId)
+            try {
+                AlarmService.startAlarm(
+                    context = applicationContext,
+                    podId = podId,
+                    podName = if (podId.isNotEmpty()) podId else "EcoVital Pod",
+                    title = title,
+                    cause = cause,
+                    body = body
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to start AlarmService, notification was shown", e)
+            }
         }
     }
 
-    private fun showStandardAlertNotification(title: String, body: String, podId: String) {
+    private fun showStandardAlertNotification(
+        title: String,
+        body: String,
+        podId: String,
+        isAlarm: Boolean
+    ) {
         createAlertsChannel()
 
         val targetUrl = if (podId.isNotEmpty()) "$SERVER_BASE_URL/pods/$podId" else "$SERVER_BASE_URL/dashboard"
@@ -131,8 +148,15 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setAutoCancel(true)
             .setSound(defaultSoundUri)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(if (isAlarm) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent)
+
+        if (isAlarm) {
+            builder.setFullScreenIntent(pendingIntent, true)
+        }
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
         manager?.notify(System.currentTimeMillis().toInt(), builder.build())
@@ -141,6 +165,12 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
     private fun createAlertsChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
+                .build()
+
             val channel = NotificationChannel(
                 ALERTS_CHANNEL_ID,
                 "EcoVital Air Alerts",
@@ -148,6 +178,9 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
             ).apply {
                 description = "Notifies when air quality or dust leaves healthy range"
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 400, 200, 400)
+                setSound(soundUri, audioAttributes)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             manager?.createNotificationChannel(channel)
         }

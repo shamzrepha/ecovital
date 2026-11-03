@@ -1,16 +1,19 @@
 package com.ecovital.app
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
@@ -21,6 +24,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -33,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val BASE_URL = "https://ecovital-phi.vercel.app"
         const val DASHBOARD_URL = "$BASE_URL/dashboard"
+        private const val TAG = "EcoVitalMain"
     }
 
     private lateinit var webView: WebView
@@ -42,6 +47,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rootContainer: View
 
     private var hasLoadedSuccessfully = false
+
+    private val requestNotificationLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        Log.i(TAG, "Notification permission granted: $isGranted")
+        if (isGranted) {
+            setupFCM()
+        }
+    }
 
     // Real-time receiver to auto-update / reload content when an alert push arrives
     private val pushReceiver = object : BroadcastReceiver() {
@@ -74,6 +88,8 @@ class MainActivity : AppCompatActivity() {
         setupBackNavigation()
         setupFCM()
 
+        promptNotificationPermissionIfNeeded()
+
         btnRetry.setOnClickListener {
             offlineView.visibility = View.GONE
             webView.visibility = View.VISIBLE
@@ -89,6 +105,18 @@ class MainActivity : AppCompatActivity() {
         webView.loadUrl(targetUrl)
 
         checkFirstRunPermissions()
+    }
+
+    private fun promptNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestNotificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
     }
 
     private fun setupWindowInsets() {
@@ -114,7 +142,6 @@ class MainActivity : AppCompatActivity() {
             e.printStackTrace()
         }
 
-        // Re-sync FCM token with active cookies
         checkAndSyncSession()
     }
 
@@ -187,6 +214,13 @@ class MainActivity : AppCompatActivity() {
 
                 CookieManager.getInstance().flush()
                 checkAndSyncSession()
+
+                // Inject JavaScript to sync token via WebView's active authenticated session
+                val prefs = getSharedPreferences("ecovital_prefs", Context.MODE_PRIVATE)
+                val token = prefs.getString("fcm_token", null)
+                if (!token.isNullOrEmpty()) {
+                    injectFcmSync(token)
+                }
             }
 
             override fun onReceivedError(
@@ -225,6 +259,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun injectFcmSync(token: String) {
+        val js = """
+            (function() {
+                try {
+                    fetch('/api/fcm', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ token: '$token', platform: 'android' })
+                    }).catch(function(e) {});
+                } catch(e) {}
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js, null)
+    }
+
     private fun setupBackNavigation() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -240,11 +289,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupFCM() {
         FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
-            if (task.isSuccessful && !task.result.isNullOrEmpty()) {
-                val token = task.result
+            if (!task.isSuccessful) {
+                Log.w(TAG, "Fetching FCM registration token failed", task.exception)
+                return@addOnCompleteListener
+            }
+            val token = task.result
+            if (!token.isNullOrEmpty()) {
+                Log.i(TAG, "FCM Token obtained: $token")
                 val prefs = getSharedPreferences("ecovital_prefs", Context.MODE_PRIVATE)
                 prefs.edit().putString("fcm_token", token).apply()
                 checkAndSyncSession()
+                runOnUiThread {
+                    injectFcmSync(token)
+                }
             }
         }
     }
@@ -252,7 +309,6 @@ class MainActivity : AppCompatActivity() {
     private fun checkAndSyncSession() {
         val prefs = getSharedPreferences("ecovital_prefs", Context.MODE_PRIVATE)
         val token = prefs.getString("fcm_token", null) ?: return
-
         EcoFirebaseMessagingService.syncFcmTokenWithServer(token)
     }
 

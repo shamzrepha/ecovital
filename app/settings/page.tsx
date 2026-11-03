@@ -322,6 +322,24 @@ export default function SettingsPage() {
                     <div style={{ fontSize: 12, color: "#047857" }}>Connected to Android native shell with emergency lock-screen siren</div>
                   </div>
                 </div>
+                <button type="button" className="btn small" onClick={async () => {
+                  if (typeof window !== "undefined" && (window as any).AndroidBridge?.getFcmToken) {
+                    const t = (window as any).AndroidBridge.getFcmToken();
+                    if (t) {
+                      const r = await fetch("/api/fcm", {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ token: t, platform: "android" }),
+                      });
+                      const j = await r.json();
+                      setMsg(j.ok ? "Android phone alerts linked to your account!" : (j.error || "Sync failed"));
+                    } else {
+                      setMsg("FCM token initializing on device...");
+                    }
+                  }
+                }}>
+                  🔄 Sync Phone Alerts
+                </button>
                 <button type="button" className="btn small danger" onClick={triggerTestAlarm}>
                   🚨 Test Alarm Siren
                 </button>
