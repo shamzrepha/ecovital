@@ -36,7 +36,7 @@ export async function POST(req: Request) {
     const result = await ingest(
       {
         id, name: str(body.name, 60), location: str(body.location, 80),
-        lat: numOrNull(body.lat), lng: numOrNull(body.lng), alarm: body.alarm === "gas",
+        lat: numOrNull(body.lat), lng: numOrNull(body.lng), alarm: body.alarm === "gas", cause: ["smoke", "gas", "dust", "stuffy"].includes(body.cause) ? body.cause : undefined,
         meta: { fw: str(body.fw, 20), mac: str(body.mac, 20), claim: str(body.claim, 8), rssi: numOrNull(body.rssi), uptimeS: numOrNull(body.uptimeS), mqReady: body.mqReady === true, heap: numOrNull(body.heap), rst: str(body.rst, 12), drops: numOrNull(body.drops), dhtOk: body.dhtOk === false ? false : body.dhtOk === true ? true : null },
       },
       readings,
