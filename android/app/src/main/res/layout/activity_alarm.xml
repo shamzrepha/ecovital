@@ -5,32 +5,32 @@
     android:background="@color/emergency_red"
     android:gravity="center"
     android:orientation="vertical"
-    android:padding="28dp">
+    android:padding="24dp">
 
-    <!-- Flashing or prominent emergency icon -->
+    <!-- Emergency strobe icon -->
     <TextView
         android:id="@+id/tvAlarmIcon"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="🚨"
-        android:textSize="64sp" />
+        android:textSize="72sp" />
 
     <TextView
         android:id="@+id/tvAlarmTitle"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
+        android:layout_marginTop="8dp"
         android:gravity="center"
-        android:text="EMERGENCY AIR ALARM"
+        android:text="EMERGENCY ALARM"
         android:textColor="#FFFFFF"
-        android:textSize="24sp"
+        android:textSize="28sp"
         android:textStyle="bold" />
 
     <TextView
         android:id="@+id/tvPodName"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         android:gravity="center"
         android:text="Pod: Living Room"
         android:textColor="#FEF08A"
@@ -41,7 +41,7 @@
         android:id="@+id/tvCause"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="14dp"
         android:gravity="center"
         android:text="Possible gas or fumes"
         android:textColor="#FFFFFF"
@@ -56,9 +56,10 @@
         android:background="#7F1D1D"
         android:gravity="center"
         android:padding="16dp"
-        android:text="Open windows, put out flames, leave if you smell gas."
+        android:text="1. Evacuate room immediately.\n2. Open windows to ventilate.\n3. Put out flames, do NOT flip switches.\n4. Call emergency responders if unsafe."
         android:textColor="#FFFFFF"
-        android:textSize="16sp" />
+        android:textSize="15sp"
+        android:lineSpacingExtra="4dp" />
 
     <Space
         android:layout_width="match_parent"
@@ -70,25 +71,46 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
+        <!-- Prominent Nigerian Emergency Dialer Button (112) -->
+        <Button
+            android:id="@+id/btnCallEmergency"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:backgroundTint="#FBBF24"
+            android:text="📞 CALL EMERGENCY (112)"
+            android:textColor="#78350F"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="12dp"
+            android:gravity="center"
+            android:text="Nigeria Toll-Free: Police · Fire · Ambulance"
+            android:textColor="#FEF08A"
+            android:textSize="12sp" />
+
         <Button
             android:id="@+id/btnStopAlarm"
             android:layout_width="match_parent"
-            android:layout_height="60dp"
+            android:layout_height="54dp"
             android:backgroundTint="#FFFFFF"
-            android:text="STOP ALARM"
+            android:text="🔇 STOP ALARM SIREN"
             android:textColor="@color/emergency_red"
-            android:textSize="18sp"
+            android:textSize="16sp"
             android:textStyle="bold" />
 
         <Button
             android:id="@+id/btnOpenPod"
             android:layout_width="match_parent"
-            android:layout_height="54dp"
-            android:layout_marginTop="12dp"
+            android:layout_height="50dp"
+            android:layout_marginTop="10dp"
             android:backgroundTint="#1E293B"
-            android:text="OPEN POD IN ECOVITAL"
+            android:text="📍 VIEW POD IN ECOVITAL"
             android:textColor="#FFFFFF"
-            android:textSize="16sp" />
+            android:textSize="15sp" />
     </LinearLayout>
 
 </LinearLayout>

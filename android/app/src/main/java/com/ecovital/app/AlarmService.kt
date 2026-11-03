@@ -188,6 +188,17 @@ class AlarmService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
         )
 
+        // Emergency Call Action (Nigerian Toll-Free 112)
+        val callIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+        }
+        val callPendingIntent = PendingIntent.getActivity(
+            this,
+            1003,
+            callIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle("🚨 EMERGENCY: $podName")
@@ -199,6 +210,7 @@ class AlarmService : Service() {
             .setAutoCancel(false)
             .setFullScreenIntent(fullScreenPendingIntent, true)
             .setContentIntent(fullScreenPendingIntent)
+            .addAction(android.R.drawable.ic_menu_call, "CALL 112", callPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "STOP ALARM", stopPendingIntent)
             .build()
     }

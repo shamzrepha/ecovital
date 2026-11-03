@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { METRICS, METRIC_KEYS, type MetricKey } from "@/lib/config";
 
 export default function SettingsPage() {
@@ -17,22 +18,37 @@ export default function SettingsPage() {
     hum: true,
   });
   const [notifications, setNotifications] = useState<any[]>([]);
-  const [pushStatus, setPushStatus] = useState<string>("Not enabled in this browser yet");
+  const [pushStatus, setPushStatus] = useState<string>("Checking alert status…");
   const [isAndroidApp, setIsAndroidApp] = useState(false);
+  const [fcmToken, setFcmToken] = useState("");
   const [msg, setMsg] = useState("");
 
   const load = useCallback(async () => {
-    if (typeof window !== "undefined" && (window as any).AndroidBridge) {
-      setIsAndroidApp(true);
-      const bridgeToken = (window as any).AndroidBridge.getFcmToken?.();
-      if (bridgeToken) {
-        fetch("/api/fcm", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ token: bridgeToken, platform: "android" }),
-        }).catch(() => {});
+    if (typeof window !== "undefined") {
+      const bridge = (window as any).AndroidBridge;
+      if (bridge) {
+        setIsAndroidApp(true);
+        const bridgeToken = bridge.getFcmToken?.() || bridge.syncToken?.();
+        if (bridgeToken) {
+          setFcmToken(bridgeToken);
+          fetch("/api/fcm", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token: bridgeToken, platform: "android" }),
+          })
+            .then((r) => r.json())
+            .then((j) => {
+              if (j.ok) {
+                setPushStatus("Active: Native Android Companion App paired for sirens");
+              }
+            })
+            .catch(() => {});
+        }
+      } else if ("Notification" in window) {
+        setPushStatus(`Browser permission: ${Notification.permission}`);
       }
     }
+
     const res = await fetch("/api/user", { cache: "no-store" });
     const j = await res.json();
     if (j.user) {
@@ -46,9 +62,6 @@ export default function SettingsPage() {
       if (j.user.notifyMetrics) setNotifyMetrics(j.user.notifyMetrics);
     }
     setNotifications(j.notifications || []);
-    if (typeof window !== "undefined" && "Notification" in window) {
-      setPushStatus(`Browser permission: ${Notification.permission}`);
-    }
   }, []);
 
   useEffect(() => {
@@ -88,17 +101,63 @@ export default function SettingsPage() {
     return outputArray;
   }
 
+  async function syncAndroidToken() {
+    try {
+      setMsg("Syncing Android phone token with your EcoVital account...");
+      let t = fcmToken;
+      if (typeof window !== "undefined" && (window as any).AndroidBridge) {
+        t = (window as any).AndroidBridge.getFcmToken?.() || (window as any).AndroidBridge.syncToken?.() || "";
+      }
+      if (!t) {
+        setMsg("Initializing FCM token on device. Please wait a few seconds and tap again.");
+        return;
+      }
+      const r = await fetch("/api/fcm", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: t, platform: "android" }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setMsg("✅ Android phone alerts successfully linked to your account!");
+        setPushStatus("Active: Native Android Companion App linked");
+      } else {
+        setMsg(`Sync failed: ${j.error || "Unknown server error"}`);
+      }
+    } catch (e: any) {
+      setMsg(`Sync error: ${e?.message ?? e}`);
+    }
+  }
+
   async function requestBrowserNotifications() {
-    if (typeof window === "undefined" || !("Notification" in window) || !("serviceWorker" in navigator)) {
-      setPushStatus("Browser notifications or service worker not supported on this device.");
+    // If inside Android companion app, use native phone sync instead of web push!
+    if (isAndroidApp || (typeof window !== "undefined" && (window as any).AndroidBridge)) {
+      await syncAndroidToken();
       return;
     }
+
+    if (typeof window === "undefined" || !("Notification" in window) || !("serviceWorker" in navigator)) {
+      setPushStatus("Web Push is not supported in this browser. Please use the EcoVital Android App.");
+      return;
+    }
+
     try {
       const perm = await Notification.requestPermission();
       setPushStatus(`Browser permission: ${perm}`);
-      if (perm !== "granted") return;
+      if (perm !== "granted") {
+        setMsg("Notification permission not granted. Please allow notifications in your browser settings.");
+        return;
+      }
 
-      const reg = await navigator.serviceWorker.ready;
+      let reg: ServiceWorkerRegistration;
+      try {
+        reg = await navigator.serviceWorker.register("/sw.js");
+        await navigator.serviceWorker.ready;
+      } catch (swErr: any) {
+        setPushStatus(`Service Worker error: ${swErr?.message ?? swErr}`);
+        return;
+      }
+
       const vapidRes = await fetch("/api/push");
       const { vapidPublicKey } = await vapidRes.json();
       if (!vapidPublicKey) {
@@ -106,12 +165,20 @@ export default function SettingsPage() {
         return;
       }
 
-      const old = await reg.pushManager.getSubscription();
-      if (old) await old.unsubscribe().catch(() => {});   // an older one may have been made with different keys
-      const sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
-      });
+      let old = await reg.pushManager.getSubscription();
+      if (old) await old.unsubscribe().catch(() => {});
+
+      let sub: PushSubscription;
+      try {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),
+        });
+      } catch (subErr: any) {
+        console.error("Push subscribe error", subErr);
+        setPushStatus(`Push setup: Browser push registration failed (${subErr?.message || "unsupported"}). On mobile, use the EcoVital Android App.`);
+        return;
+      }
 
       const saveRes = await fetch("/api/push", {
         method: "POST",
@@ -120,7 +187,10 @@ export default function SettingsPage() {
       });
       const saveJson = await saveRes.json();
       if (saveJson.ok) {
-        setPushStatus("Active! Phone push alerts enabled (even with app closed).");
+        setPushStatus("Active! Browser push alerts enabled (even with app closed).");
+        setMsg("Browser notifications enabled!");
+      } else {
+        setPushStatus(`Failed to save subscription: ${saveJson.error || "error"}`);
       }
     } catch (e: any) {
       setPushStatus(`Push setup: ${e?.message ?? e}`);
@@ -129,7 +199,7 @@ export default function SettingsPage() {
 
   async function testPushNotification() {
     try {
-      setMsg("Sending test phone push notification...");
+      setMsg("Sending test notification to your device...");
       const res = await fetch("/api/push", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -137,9 +207,9 @@ export default function SettingsPage() {
       });
       const j = await res.json();
       if (j.ok && j.sent > 0) {
-        setMsg("Push notification delivered to your device!");
+        setMsg(`Delivered alert to ${j.sent} device(s)!`);
       } else if (j.ok && j.sent === 0) {
-        setMsg("No active push subscription found. Tap 'Enable Phone Alerts' first.");
+        setMsg("No active phone registration found. Tap 'Sync Phone Alerts' or 'Enable Push' first.");
       } else {
         setMsg(j.error || "Test failed");
       }
@@ -165,6 +235,15 @@ export default function SettingsPage() {
           }).catch(() => {});
         }
       }
+      // Trigger Web Red SOS Overlay as well
+      if (typeof window !== "undefined" && (window as any).triggerTestSos) {
+        (window as any).triggerTestSos({
+          title: "🚨 Emergency Siren Test",
+          message: "Testing emergency red alert overlay with Nigerian 112 emergency dialer.",
+          cause: "gas",
+        });
+      }
+
       const res = await fetch("/api/fcm/test", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -172,7 +251,7 @@ export default function SettingsPage() {
       });
       const j = await res.json();
       if (j.ok) {
-        setMsg(`🚨 Emergency alarm dispatched to phone! (${j.sent} device(s) notified)`);
+        setMsg(`🚨 Emergency alarm dispatched! (${j.sent} phone(s) notified with siren & 112 overlay)`);
       } else {
         setMsg(`Alarm test: ${j.error || "Failed"}`);
       }
@@ -197,6 +276,64 @@ export default function SettingsPage() {
       </header>
 
       {msg && <div className="banner info" role="status">{msg}</div>}
+
+      {/* Prominent Phone Alerts & Lock-Screen Siren Card */}
+      <section
+        style={{
+          margin: "16px 0 24px",
+          padding: "18px 22px",
+          borderRadius: 14,
+          background: isAndroidApp
+            ? "linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(5, 150, 105, 0.08))"
+            : "linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(245, 158, 11, 0.08))",
+          border: isAndroidApp ? "2px solid #10b981" : "2px solid rgba(59, 130, 246, 0.35)",
+          boxShadow: "var(--shadow-sm)",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 14 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 22 }}>{isAndroidApp ? "🟢" : "📱"}</span>
+              <h2 style={{ fontSize: 18, margin: 0, fontWeight: 700 }}>
+                {isAndroidApp ? "Phone Alarm: Active (Android Companion App)" : "Emergency Phone Alarm & Siren"}
+              </h2>
+            </div>
+            <p style={{ margin: "2px 0 8px", fontSize: 14, color: "var(--ink2)", maxWidth: 660, lineHeight: 1.5 }}>
+              {isAndroidApp
+                ? "Your phone is connected to the native Android shell. In the event of dangerous gas or smoke, your phone will bypass silent mode, play a continuous ambulance siren over your lock screen, and display a 1-tap dialer for Nigerian emergency services (112)."
+                : "Want non-stop ambulance sirens that ring over your phone's lock screen and 1-tap 112 emergency calling during smoke or gas hazards? Install the EcoVital Android app or enable browser push notifications."}
+            </p>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--ink2)", marginTop: 4 }}>
+              Status: <span style={{ color: "var(--good)" }}>{pushStatus}</span>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {isAndroidApp ? (
+              <>
+                <button type="button" className="btn small primary" onClick={syncAndroidToken} style={{ fontWeight: 700 }}>
+                  🔄 Sync Phone Alerts
+                </button>
+                <button type="button" className="btn small danger" onClick={triggerTestAlarm} style={{ fontWeight: 700 }}>
+                  🚨 Test Alarm Siren (112 Screen)
+                </button>
+              </>
+            ) : (
+              <>
+                <Link href="/download" className="btn small primary" style={{ fontWeight: 700 }}>
+                  📥 Download Android App
+                </Link>
+                <button type="button" className="btn small" onClick={requestBrowserNotifications} style={{ fontWeight: 600 }}>
+                  🔔 Enable Browser Push
+                </button>
+                <button type="button" className="btn small danger" onClick={triggerTestAlarm} style={{ fontWeight: 700 }}>
+                  🚨 Preview SOS Alert Screen
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </section>
 
       <div className="cols">
         <main>
@@ -304,54 +441,10 @@ export default function SettingsPage() {
               <button type="submit" className="btn primary">
                 Save Preferences
               </button>
-              <button type="button" className="btn" onClick={requestBrowserNotifications}>
-                🔔 Enable Phone Alerts (Web Push)
-              </button>
               <button type="button" className="btn small" onClick={testPushNotification}>
                 📲 Send Test Phone Alert
               </button>
-              <span className="note">{pushStatus}</span>
             </div>
-
-            {isAndroidApp ? (
-              <div style={{ marginTop: 16, padding: "12px 16px", borderRadius: 8, background: "#ecfdf5", border: "1px solid #10b981", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span style={{ fontSize: 18 }}>🟢</span>
-                  <div>
-                    <strong style={{ color: "#065f46" }}>Phone alarm: on</strong>
-                    <div style={{ fontSize: 12, color: "#047857" }}>Connected to Android native shell with emergency lock-screen siren</div>
-                  </div>
-                </div>
-                <button type="button" className="btn small" onClick={async () => {
-                  if (typeof window !== "undefined" && (window as any).AndroidBridge?.getFcmToken) {
-                    const t = (window as any).AndroidBridge.getFcmToken();
-                    if (t) {
-                      const r = await fetch("/api/fcm", {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({ token: t, platform: "android" }),
-                      });
-                      const j = await r.json();
-                      setMsg(j.ok ? "Android phone alerts linked to your account!" : (j.error || "Sync failed"));
-                    } else {
-                      setMsg("FCM token initializing on device...");
-                    }
-                  }
-                }}>
-                  🔄 Sync Phone Alerts
-                </button>
-                <button type="button" className="btn small danger" onClick={triggerTestAlarm}>
-                  🚨 Test Alarm Siren
-                </button>
-              </div>
-            ) : (
-              <div style={{ marginTop: 16, padding: "10px 14px", borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
-                <span style={{ fontSize: 13, color: "#475569" }}>
-                  Want sirens that ring over your phone's lock screen during gas/smoke alerts?
-                </span>
-                <a href="/download" className="btn small">Get EcoVital Android App</a>
-              </div>
-            )}
           </form>
 
           <section className="card">

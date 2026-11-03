@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.RingtoneManager
+import android.net.Uri
 import android.os.Build
 import android.util.Log
 import android.webkit.CookieManager
@@ -92,6 +93,8 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
                 putExtra("podId", podId)
                 putExtra("cause", cause)
                 putExtra("type", type)
+                putExtra("title", title)
+                putExtra("body", body)
                 putExtra("target_url", targetUrl)
             }
             sendBroadcast(broadcast)
@@ -99,11 +102,13 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
             e.printStackTrace()
         }
 
-        // 1. ALWAYS display a high-priority system notification with heads-up banner & sound
-        showStandardAlertNotification(title, body, podId, type == "alarm")
+        val isAlarm = type == "alarm"
 
-        // 2. If it is an emergency alarm, also attempt to launch looping siren service & lock screen alert
-        if (type == "alarm") {
+        // 1. ALWAYS display a high-priority system notification with heads-up banner & sound
+        showStandardAlertNotification(title, body, podId, isAlarm)
+
+        // 2. If it is an emergency alarm, also launch looping siren service & full-screen AlarmActivity
+        if (isAlarm) {
             try {
                 AlarmService.startAlarm(
                     context = applicationContext,
@@ -115,6 +120,20 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start AlarmService, notification was shown", e)
+            }
+
+            try {
+                val alarmIntent = Intent(applicationContext, AlarmActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(AlarmService.EXTRA_POD_ID, podId)
+                    putExtra(AlarmService.EXTRA_POD_NAME, if (podId.isNotEmpty()) podId else "EcoVital Pod")
+                    putExtra(AlarmService.EXTRA_TITLE, title)
+                    putExtra(AlarmService.EXTRA_CAUSE, cause)
+                    putExtra(AlarmService.EXTRA_BODY, body)
+                }
+                applicationContext.startActivity(alarmIntent)
+            } catch (e: Exception) {
+                Log.e(TAG, "Could not start AlarmActivity directly from background", e)
             }
         }
     }
@@ -156,6 +175,18 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
 
         if (isAlarm) {
             builder.setFullScreenIntent(pendingIntent, true)
+
+            // Direct Call 112 action button right on the notification
+            val callIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            val callPending = PendingIntent.getActivity(
+                this,
+                2001,
+                callIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
+            )
+            builder.addAction(android.R.drawable.ic_menu_call, "CALL 112", callPending)
         }
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager

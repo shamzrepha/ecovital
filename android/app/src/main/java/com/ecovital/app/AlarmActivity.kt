@@ -3,6 +3,7 @@ package com.ecovital.app
 import android.app.KeyguardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -40,6 +41,7 @@ class AlarmActivity : AppCompatActivity() {
         val tvPodName = findViewById<TextView>(R.id.tvPodName)
         val tvCause = findViewById<TextView>(R.id.tvCause)
         val tvAdvice = findViewById<TextView>(R.id.tvAdvice)
+        val btnCallEmergency = findViewById<Button>(R.id.btnCallEmergency)
         val btnStop = findViewById<Button>(R.id.btnStopAlarm)
         val btnOpen = findViewById<Button>(R.id.btnOpenPod)
 
@@ -48,10 +50,24 @@ class AlarmActivity : AppCompatActivity() {
         val isSmoke = cause.contains("smoke", ignoreCase = true)
         if (isSmoke) {
             tvCause.text = "Smoke or burning likely"
-            tvAdvice.text = "Open windows, check for fire, evacuate if necessary."
+            tvAdvice.text = "1. Evacuate immediately.\n2. Open windows to ventilate.\n3. Put out flames, do NOT flip switches.\n4. Call emergency responders (112)."
         } else {
             tvCause.text = "Possible gas or fumes"
-            tvAdvice.text = "Open windows, put out flames, leave if you smell gas."
+            tvAdvice.text = "1. Open windows and doors.\n2. Extinguish all open flames.\n3. Do NOT operate light switches or appliances.\n4. Evacuate if odor persists."
+        }
+
+        // Call Nigerian Emergency Toll-Free line (112)
+        btnCallEmergency.setOnClickListener {
+            AlarmService.stopAlarm(this)
+            try {
+                val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(dialIntent)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            finish()
         }
 
         btnStop.setOnClickListener {
@@ -76,6 +92,6 @@ class AlarmActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Java", ReplaceWith("Unit"))
     override fun onBackPressed() {
-        // Disallow dismissing critical alarm with back button; user must tap Stop Alarm
+        // Disallow dismissing critical alarm with back button; user must tap Stop Alarm or Call Emergency
     }
 }

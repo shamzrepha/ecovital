@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import EmergencySosOverlay from "./EmergencySosOverlay";
 
 type Me = { id: string; email: string; name: string; role: string };
 
@@ -49,7 +50,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       .then((r) => r.json())
       .then((j) => live && setMe(j.user ?? null))
       .catch(() => live && setMe(null));
+
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
     // Auto-sync Android Companion App FCM Token
     try {
       const bridge = (window as any).AndroidBridge;
@@ -64,6 +67,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (_) {}
+
     return () => { live = false; };
   }, [pathname]);
 
@@ -94,6 +98,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   if (isPublic) {
     return (
       <>
+        <EmergencySosOverlay />
         <div className="app-topbar">
           <div className="app-topbar-inner">
             {brand("/")}
@@ -139,6 +144,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <>
+      <EmergencySosOverlay />
       <div className="app-topbar">
         <div className="app-topbar-inner">
           {brand("/dashboard")}
@@ -150,13 +156,24 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             ))}
           </nav>
           <span className="spacer" />
+
+          {/* Quick Settings & Alerts Button */}
+          <Link
+            href="/settings"
+            className={`btn small ${pathname === "/settings" ? "primary" : ""}`}
+            title="Settings & Emergency Phone Alerts"
+            style={{ display: "inline-flex", alignItems: "center", gap: 4, fontWeight: 600 }}
+          >
+            ⚙ Settings
+          </Link>
+
           <Link
             href="/download"
             className="btn small"
             title="Download Android Companion App for Lock-Screen Siren"
             style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
           >
-            📲 Get App
+            📲 App
           </Link>
           <span className="who" title={me.email}>{me.name}</span>
           {themeBtn}
@@ -164,10 +181,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </div>
       {children}
+      {/* Mobile Bottom Navigation - Renders ALL items including Settings */}
       <nav className="bottom-tabs" aria-label="Mobile navigation">
-        {items.slice(0, 5).map((item) => (
+        {items.map((item) => (
           <Link key={item.href} href={item.href} className={`bottom-tab ${isActive(item.href) ? "active" : ""}`}>
-            <span aria-hidden="true" style={{ fontSize: 15 }}>{item.icon}</span>
+            <span aria-hidden="true" style={{ fontSize: 16 }}>{item.icon}</span>
             <span>{item.short}</span>
           </Link>
         ))}

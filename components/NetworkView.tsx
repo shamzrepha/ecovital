@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ago } from "./useVoice";
 import AiPredictorPanel from "./AiPredictorPanel";
 import SosButton from "./SosButton";
+import PhoneSyncBanner from "./PhoneSyncBanner";
 import { METRIC_KEYS, METRICS, ROOM_PROFILES, fmt, statusRank, statusWord, type MetricKey, type RoomProfileKey } from "@/lib/config";
 
 function worst(status: Record<string, string>): "good" | "watch" | "bad" {
@@ -72,6 +73,8 @@ export default function NetworkView() {
         <span className="spacer" />
         <Link className="btn primary" href="/add">＋ Add a pod</Link>
       </header>
+
+      <PhoneSyncBanner />
 
       {error && <div className="banner">Could not load your pods: {error}</div>}
       {!data && !error && <div className="skeleton">Loading your rooms…</div>}

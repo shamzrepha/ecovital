@@ -57,9 +57,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // Real-time receiver to auto-update / reload content when an alert push arrives
+    // Real-time receiver to auto-update / reload content or launch alarm when an alert push arrives
     private val pushReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
+            val type = intent?.getStringExtra("type")
+            if (type == "alarm") {
+                val alarmIntent = Intent(this@MainActivity, AlarmActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    putExtra(AlarmService.EXTRA_POD_ID, intent.getStringExtra("podId"))
+                    putExtra(AlarmService.EXTRA_CAUSE, intent.getStringExtra("cause"))
+                    putExtra(AlarmService.EXTRA_TITLE, intent.getStringExtra("title"))
+                    putExtra(AlarmService.EXTRA_BODY, intent.getStringExtra("body"))
+                }
+                startActivity(alarmIntent)
+                return
+            }
+
             val targetUrl = intent?.getStringExtra("target_url")
             runOnUiThread {
                 if (!targetUrl.isNullOrEmpty() && targetUrl != webView.url) {
@@ -181,7 +194,7 @@ class MainActivity : AppCompatActivity() {
         settings.loadWithOverviewMode = true
         settings.cacheMode = WebSettings.LOAD_DEFAULT
 
-        // Register native bridge for web settings page
+        // Register native bridge for web settings page and emergency overlay
         webView.addJavascriptInterface(
             AndroidBridge(this) {
                 // Test alarm trigger
@@ -193,6 +206,16 @@ class MainActivity : AppCompatActivity() {
                     cause = "smoke",
                     body = "Testing phone emergency siren over lock screen."
                 )
+                // Also launch AlarmActivity immediately
+                val alarmIntent = Intent(this, AlarmActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    putExtra(AlarmService.EXTRA_POD_ID, "test-pod")
+                    putExtra(AlarmService.EXTRA_POD_NAME, "Demo Pod (Test)")
+                    putExtra(AlarmService.EXTRA_TITLE, "🚨 Emergency Siren Test")
+                    putExtra(AlarmService.EXTRA_CAUSE, "smoke")
+                    putExtra(AlarmService.EXTRA_BODY, "Testing phone emergency siren over lock screen.")
+                }
+                startActivity(alarmIntent)
             },
             "AndroidBridge"
         )
@@ -243,10 +266,25 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?
             ): Boolean {
                 val url = request?.url?.toString() ?: return false
+
+                // Handle Nigerian Emergency Number or phone dialer links
+                if (url.startsWith("tel:")) {
+                    try {
+                        val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse(url)).apply {
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        startActivity(dialIntent)
+                        return true
+                    } catch (_: Exception) {
+                        return false
+                    }
+                }
+
                 // Internal app URLs stay inside WebView
                 if (url.startsWith(BASE_URL) || url.startsWith("/")) {
                     return false
                 }
+
                 // External URLs open in system browser
                 try {
                     val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
