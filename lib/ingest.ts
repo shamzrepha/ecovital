@@ -328,6 +328,32 @@ export async function ingest(
     }
   }
 
+  // The app decides on its own: while any reading is still in the BAD range, keep alerting the phone every 3 minutes
+  // (the first alert comes from the rules above). Bad air or dust is treated as an alarm and ignores quiet hours.
+  {
+    const badNow = (METRIC_KEYS as MetricKey[]).filter((k) => values[k] !== undefined && String((next.status as any)[k] ?? "").startsWith("bad"));
+    if (badNow.length && !triggers.some((t) => t.kind === "alert")) {
+      const last = await sql`SELECT 1 FROM notifications_log WHERE device_id = ${id} AND sent_at > ${iso(now - 180_000)}::timestamptz LIMIT 1`;
+      if (!last.length) {
+        let remPrefs: any = {};
+        if (podRow.claimed_by) {
+          const u = await sql`SELECT prefs FROM users WHERE id = ${podRow.claimed_by}`;
+          remPrefs = u[0]?.prefs ?? {};
+        }
+        const severe = badNow.some((k) => k === "air" || k === "dust");
+        if (severe || !isQuietHour(now, remPrefs)) {
+          const remName = podRow.nickname || info.name || id;
+          const label: Record<string, string> = { dust: "Dust", air: "Air quality", temp: "Temperature", hum: "Humidity" };
+          const title = `${remName}: ${severe ? "🚨 Air still bad" : "Room still uncomfortable"}`;
+          const body = `${badNow.map((k) => label[k]).join(" and ")} ${badNow.length > 1 ? "are" : "is"} still in the bad range. Open the windows and check the room.`;
+          await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
+                    VALUES (${podRow.claimed_by ?? null}, ${id}, ${null}, 'web_push', ${title}, ${body})`;
+          await sendPushToUser({ userId: podRow.claimed_by ?? null, title, body, tag: `pod-${id}`, isGasAlarm: severe, data: { url: "/dashboard" } }).catch(() => {});
+        }
+      }
+    }
+  }
+
   // The pod's own fast gas/fumes alarm: logged once per 2 minutes and always pushed to the phone, even in quiet hours.
   if (info.alarm) {
     const recent = await sql`SELECT id FROM events WHERE device_id = ${id} AND data->>'alarm' = 'gas' AND ts > ${iso(now - 120_000)}::timestamptz LIMIT 1`;
