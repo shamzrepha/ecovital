@@ -37,6 +37,9 @@ export default function Landing() {
             </p>
             <div className="lp-cta">
               <Link className="btn primary lp-btn" href="/signup">Create your account</Link>
+              <Link className="btn lp-btn" href="/download" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                📲 Download App
+              </Link>
               <a className="btn lp-btn" href="#contact">Get pods</a>
             </div>
           </div>
