@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "2.5"
+#define FW_VERSION "2.7"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -91,8 +91,8 @@ uint32_t wifiDrops = 0;
 #define SPEAKER_VOLUME (spkVol * OUT_HEADROOM)    // loudness of beeps and AI voice, set from the app
 #define CLIP_VOLUME (spkVol * OUT_HEADROOM)
 #define WELCOME_VOLUME (spkVol * OUT_HEADROOM)
-#define UPLOAD_EVERY_MS 15000    // how often readings are sent
-#define SAMPLE_EVERY_MS 5000     // how often a reading is recorded
+#define UPLOAD_EVERY_MS 3000    // how often readings are sent
+#define SAMPLE_EVERY_MS 2000     // how often a reading is recorded
 // =====================================================================
 
 // ---------- TFT ----------
@@ -519,7 +519,12 @@ void takePulse() {
   delayMicroseconds(280);
   dustSumMv += analogReadMilliVolts(PIN_DUST_VO);
   digitalWrite(PIN_DUST_LED, HIGH);
-  mqSumMv += analogReadMilliVolts(PIN_MQ);
+  delayMicroseconds(35); // Allow ADC supply rail to settle after LED high
+  int m1 = analogReadMilliVolts(PIN_MQ);
+  int m2 = analogReadMilliVolts(PIN_MQ);
+  int m3 = analogReadMilliVolts(PIN_MQ);
+  int med = (m1 > m2) ? ((m2 > m3) ? m2 : ((m1 > m3) ? m3 : m1)) : ((m1 > m3) ? m1 : ((m2 > m3) ? m3 : m2));
+  mqSumMv += med;
   sampleN++;
 }
 
@@ -1005,16 +1010,22 @@ void refreshAdvice(uint32_t now) {
   setAdvice("All readings are within healthy limits.", 0);
 }
 
+static uint32_t gasCooldownUntil = 0;
 void gasStep(uint32_t now, float air) {
   if (isnan(air)) return;
   bool test = gasTestUntil && (int32_t)(gasTestUntil - now) > 0;
   if (isnan(airRef)) { airRef = air; gasWarmAt = now; }
   if (!test && now - gasWarmAt < 20000) { airRef += 0.2f * (air - airRef); return; }   // let the sensor settle after warm-up
+
+  // Do not re-trigger during cooldown to prevent sensor bounce / double trigger
+  if (!gasAlarm && !test && (int32_t)(gasCooldownUntil - now) > 0) return;
+
   bool bad = test || air < GAS_LOW_LEVEL || air <= airRef - GAS_DROP_POINTS;
   if (!gasAlarm) {
     if (bad) {
       if (!gasLowSince) gasLowSince = now ? now : 1;
-      if (now - gasLowSince >= (test ? 0 : 1000)) {
+      // Require 2.5s sustained drop before alarm latch (filters out transient ADC spikes)
+      if (now - gasLowSince >= (test ? 0 : 2500)) {
         gasAlarm = true; gasStarted = now; gasLastSound = 0; gasClearSince = 0; gasTrig = true; uploadNow = true;
         Serial.printf("[ALARM] possible gas or fumes: air index %.0f (baseline %.0f)\n", air, airRef);
       }
@@ -1023,11 +1034,14 @@ void gasStep(uint32_t now, float air) {
       airRef += 0.01f * (air - airRef);          // follow slow changes only
     }
   } else {
-    bool ok = !test && air >= GAS_LOW_LEVEL + 10 && air >= airRef - 6.0f;
+    // Hold alarm for at least 15s to prevent stutter/double-buzzing
+    bool minHoldPassed = (now - gasStarted) >= 15000UL;
+    bool ok = !test && minHoldPassed && air >= GAS_LOW_LEVEL + 8 && air >= airRef - 6.0f;
     if (ok) { if (!gasClearSince) gasClearSince = now ? now : 1; } else gasClearSince = 0;
     bool timeout = now - gasStarted > 300000UL;  // never stay in alarm forever if the room really changed
-    if ((gasClearSince && now - gasClearSince >= 10000) || timeout) {
+    if ((gasClearSince && now - gasClearSince >= 12000) || timeout) {
       gasAlarm = false; gasLowSince = 0; uploadNow = true;
+      gasCooldownUntil = now + 15000UL; // 15-second debounce cooldown
       if (timeout) airRef = air;
       Serial.println("[ALARM] cleared");
       queueClip(CLIP_ALL_GOOD, 90, now);

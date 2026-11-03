@@ -71,7 +71,7 @@ export default function NodeView({ id, readOnly = false, shareToken }: { id: str
         load();
         setTick((x) => x + 1);
       }
-    }, 3000);
+    }, 2000);
     return () => clearInterval(t);
   }, [load]);
 

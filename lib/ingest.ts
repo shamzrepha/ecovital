@@ -235,6 +235,7 @@ export async function ingest(
   const prev: DeviceState = { ...emptyState(), ...(st[0]?.state ?? {}) };
   const { next, triggers } = evaluateRules({ now, values, prev, forecasts, configs });
 
+  let pushedGasAlarm = false;
   // 4. one voice line per cycle (the most important trigger); the rest are logged silently
   if (triggers.length) {
     const ctxSeries = {} as Record<MetricKey, Pt[]>;
@@ -311,6 +312,7 @@ export async function ingest(
       const canNotify = isGasAlarm || ((isAlert || speak) && metricEnabled && !isQuietHour(now, userPrefs));
 
       if (canNotify) {
+        if (isGasAlarm) pushedGasAlarm = true;
         const title = `${devName}: ${isGasAlarm ? "🚨 Gas / Severe Air Alert" : t.kind === "recovered" ? "Back to normal" : t.kind === "predictive" ? "Early warning" : "Room alert"}`;
         const body = spoken ?? describeTrigger(t);
         await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
@@ -357,7 +359,7 @@ export async function ingest(
   }
 
   // The pod's own fast gas/fumes alarm: logged once per 2 minutes and always pushed to the phone, even in quiet hours.
-  if (info.alarm) {
+  if (info.alarm && !pushedGasAlarm) {
     const recent = await sql`SELECT id FROM events WHERE device_id = ${id} AND data->>'alarm' = 'gas' AND ts > ${iso(now - 120_000)}::timestamptz LIMIT 1`;
     if (!recent.length) {
       const alarmName = podRow.nickname || info.name || id;
