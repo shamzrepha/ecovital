@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "2.4"
+#define FW_VERSION "2.5"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -788,6 +788,9 @@ bool gasAlarm = false, wasGas = false, gasTrig = false;
 float airRef = NAN;                              // slow baseline of the air index
 uint32_t gasWarmAt = 0, gasLowSince = 0, gasClearSince = 0, gasStarted = 0, gasLastSound = 0, gasTestUntil = 0;
 volatile int sirenRequest = 0;
+enum Cause { C_NONE = 0, C_SMOKE, C_GAS, C_DUST, C_STUFFY };
+uint8_t causeId = C_NONE;
+volatile bool apActive = false;                 // the pod's own setup Wi-Fi is open
 volatile bool uploadNow = false;
 
 uint8_t classifyLocal(int m, float v, uint8_t prev) {
@@ -810,7 +813,7 @@ int clipFor(int m, uint8_t st) {
 }
 
 void queueClip(int id, int prio, uint32_t now) {
-  if (gasAlarm && id == CLIP_AIR_BAD) return;     // the siren already says this
+  if (gasAlarm && (id == CLIP_AIR_BAD || id == CLIP_GAS)) return;     // the siren already says this
   if (pendingClip < 0 || prio > pendingPrio) { pendingClip = id; pendingPrio = prio; pendingAt = now; }
 }
 
@@ -872,8 +875,8 @@ void pushTrend(uint32_t now) {
 // dust only        : dust up while air quality holds
 // gas or fumes     : air quality drops fast with no heat and no dust change (the MQ135 cannot say which gas)
 // stuffy room      : air quality slowly worse with no heat and no dust change (poor ventilation, CO2 or fumes building up)
-enum Cause { C_NONE = 0, C_SMOKE, C_GAS, C_DUST, C_STUFFY };
-uint8_t causeId = C_NONE, lastCauseId = C_NONE;
+uint8_t lastCauseId = C_NONE;
+uint32_t causeClipAt[5] = {0, 0, 0, 0, 0};
 uint32_t causeSince = 0, causeSoundAt = 0;
 const char* causeWord() { return causeId == C_SMOKE ? "smoke" : causeId == C_GAS ? "gas" : causeId == C_DUST ? "dust" : causeId == C_STUFFY ? "stuffy" : ""; }
 
@@ -897,11 +900,33 @@ void diagnoseStep(uint32_t now) {                 // called every 5 s
     causeId = c;
     if (c) Serial.printf("[diagnose] %s (dust %+.0f, air %+.0f, temp %+.1f over the last minute)\n", causeWord(), dD, dA, dT);
   }
+  if ((c == C_DUST || c == C_STUFFY) && (causeClipAt[c] == 0 || now - causeClipAt[c] >= 180000UL)) {
+    causeClipAt[c] = now;
+    queueClip(c == C_DUST ? CLIP_DUST_ONLY : CLIP_STUFFY, 90, now);
+  }
   if (c == C_SMOKE && (causeSoundAt == 0 || now - causeSoundAt >= 60000UL)) {
     causeSoundAt = now; uploadNow = true;
     if (!speaking && sirenRequest == 0) sirenRequest = 1;
   }
   if (c) lastCauseId = c;
+}
+
+void connectionVoiceStep(uint32_t now) {          // called every 5 s: speaks Wi-Fi and sensor problems from the pod itself
+  static bool wasOnline = false, lostSpoken = false, setupSpoken = false, faultSpoken = false;
+  static uint32_t offSince = 0, faultSince = 0;
+  bool online = netState >= 1;
+  if (online) {
+    if (lostSpoken) { queueClip(CLIP_BACK_ONLINE, 60, now); }
+    wasOnline = true; lostSpoken = false; setupSpoken = false; offSince = 0;
+  } else if (wasOnline) {
+    if (!offSince) offSince = now ? now : 1;
+    if (!lostSpoken && now - offSince >= 30000UL) { lostSpoken = true; queueClip(CLIP_WIFI_LOST, 70, now); }
+    if (!setupSpoken && apActive && now - offSince >= 45000UL) { setupSpoken = true; queueClip(CLIP_WIFI_SETUP, 65, now); }
+  }
+  if (dhtTried && dhtFailed) {
+    if (!faultSince) faultSince = now ? now : 1;
+    if (!faultSpoken && now - faultSince >= 60000UL) { faultSpoken = true; queueClip(CLIP_SENSOR_FAULT, 75, now); }
+  } else { faultSince = 0; faultSpoken = false; }
 }
 
 const char* causeAdvice() {
@@ -1060,6 +1085,22 @@ static inline int16_t ulaw2lin(uint8_t u) {
   return (u & 0x80) ? (0x84 - t) : (t - 0x84);
 }
 
+static const int16_t ADPCM_STEP[89] PROGMEM = {7,8,9,10,11,12,13,14,16,17,19,21,23,25,28,31,34,37,41,45,50,55,60,66,73,80,88,97,107,118,130,143,157,173,190,209,230,253,279,307,337,371,408,449,494,544,598,658,724,796,876,963,1060,1166,1282,1411,1552,1707,1878,2066,2272,2499,2749,3024,3327,3660,4026,4428,4871,5358,5894,6484,7132,7845,8630,9493,10442,11487,12635,13899,15289,16818,18500,20350,22385,24623,27086,29794,32767};
+static const int8_t ADPCM_IDX[8] = {-1, -1, -1, -1, 2, 4, 6, 8};
+struct AdpcmState { int pred = 0; int idx = 0; };
+static inline int16_t adpcmNext(AdpcmState& st, uint8_t code) {   // 4-bit IMA ADPCM -> one 16-bit sample
+  int step = (int16_t)pgm_read_word(ADPCM_STEP + st.idx);
+  int d = step >> 3;
+  if (code & 4) d += step;
+  if (code & 2) d += step >> 1;
+  if (code & 1) d += step >> 2;
+  st.pred += (code & 8) ? -d : d;
+  if (st.pred > 32767) st.pred = 32767; else if (st.pred < -32768) st.pred = -32768;
+  st.idx += ADPCM_IDX[code & 7];
+  if (st.idx < 0) st.idx = 0; else if (st.idx > 88) st.idx = 88;
+  return (int16_t)st.pred;
+}
+
 void playClip(int id) {
   if (id < 0 || id >= CLIP_COUNT) return;
   if (!i2sStart()) { Serial.println("[audio] I2S start failed"); return; }
@@ -1070,10 +1111,13 @@ void playClip(int id) {
   uint32_t n = CLIPS[id].n;
   int16_t frames[512 * 2];
   int fi = 0;
+  AdpcmState st;
+  int16_t a = n ? adpcmNext(st, pgm_read_byte(d) & 15) : 0;
   for (uint32_t i = 0; i < n; i++) {
-    int16_t a = ulaw2lin(pgm_read_byte(d + i));              // 12 kHz -> 24 kHz: each sample plus the midpoint
-    int16_t b = (i + 1 < n) ? ulaw2lin(pgm_read_byte(d + i + 1)) : a;
-    int16_t o[2] = { a, (int16_t)(((int32_t)a + b) / 2) };
+    int16_t b = a;
+    if (i + 1 < n) { uint32_t j = i + 1; uint8_t by = pgm_read_byte(d + (j >> 1)); b = adpcmNext(st, (j & 1) ? (by >> 4) : (by & 15)); }
+    int16_t o[2] = { a, (int16_t)(((int32_t)a + b) / 2) };     // 12 kHz -> 24 kHz: each sample plus the midpoint
+    a = b;
     for (int k = 0; k < 2; k++) {
       int32_t v = (int32_t)(o[k] * CLIP_VOLUME);
       if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
@@ -1089,7 +1133,7 @@ void playClip(int id) {
 
 void serviceAudio() {                           // runs on the network core, the only place that touches the speaker after boot
   if (sosRequest) { sosRequest = false; playSos(); }
-  if (sirenRequest > 0) { sirenRequest = 0; playSiren(); playClip(CLIP_AIR_BAD); }
+  if (sirenRequest > 0) { sirenRequest = 0; playSiren(); playClip(causeId == C_SMOKE ? CLIP_SMOKE : CLIP_GAS); }
   if (clipRequest >= 0) { int c = clipRequest; clipRequest = -1; playClip(c); }
   if (beepRequest > 0)  { int c = beepRequest; beepRequest = 0; beepPattern(c); }
 }
@@ -1098,7 +1142,7 @@ void serviceAudio() {                           // runs on the network core, the
 #define PIN_BTN 0                         // the BOOT button on the dev board
 WebServer webServer(80);
 DNSServer dnsServer;
-bool apActive = false, netServicesUp = false;
+bool netServicesUp = false;
 volatile bool otaBusy = false, otaPending = false;
 volatile int otaPct = 0;
 char otaUrlBuf[220] = "";
@@ -1947,6 +1991,7 @@ void setup() {
     static const int ff[] = {392, 294};
     static const int fd[] = {160, 260};
     playMelody(ff, fd, 2);                          // "not connected" tone
+    playClip(CLIP_WIFI_SETUP);                      // and say it
   }
   bootBar(100);
   delay(500);
@@ -2015,6 +2060,7 @@ void loop() {
     recordSample(now);
     localAlertStep(now);
     diagnoseStep(now);
+    connectionVoiceStep(now);
     predictStep();
     refreshAdvice(now);
     pushTrend(now);
