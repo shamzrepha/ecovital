@@ -307,7 +307,8 @@ export async function ingest(
       // Gas alarms ALWAYS bypass quiet hours!
       const isGasAlarm = (t.metric === "air" && t.status === "bad-low") || (t.metric === "dust" && t.status === "bad-high");
       const metricEnabled = userPrefs?.metrics?.[t.metric] !== false;
-      const canNotify = isGasAlarm || (speak && metricEnabled && !isQuietHour(now, userPrefs));
+      const isAlert = t.kind === "alert";
+      const canNotify = isGasAlarm || ((isAlert || speak) && metricEnabled && !isQuietHour(now, userPrefs));
 
       if (canNotify) {
         const title = `${devName}: ${isGasAlarm ? "🚨 Gas / Severe Air Alert" : t.kind === "recovered" ? "Back to normal" : t.kind === "predictive" ? "Early warning" : "Room alert"}`;
@@ -322,7 +323,7 @@ export async function ingest(
             body,
             tag: `pod-${id}`,
             isGasAlarm,
-            data: { url: "/dashboard" },
+            data: { url: `/pods/${id}`, podId: id, cause: t.metric },
           }).catch(() => {});
         }
       }
@@ -349,7 +350,7 @@ export async function ingest(
           const body = `${badNow.map((k) => label[k]).join(" and ")} ${badNow.length > 1 ? "are" : "is"} still in the bad range. Open the windows and check the room.`;
           await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
                     VALUES (${podRow.claimed_by ?? null}, ${id}, ${null}, 'web_push', ${title}, ${body})`;
-          await sendPushToUser({ userId: podRow.claimed_by ?? null, title, body, tag: `pod-${id}`, isGasAlarm: severe, data: { url: "/dashboard" } }).catch(() => {});
+          await sendPushToUser({ userId: podRow.claimed_by ?? null, title, body, tag: `pod-${id}`, isGasAlarm: severe, data: { url: `/pods/${id}`, podId: id, cause: severe ? "air" : "room" } }).catch(() => {});
         }
       }
     }
@@ -373,7 +374,7 @@ export async function ingest(
       const title = `${alarmName}: 🚨 ${smoke ? "Smoke or burning likely" : "Possible gas or fumes"}`;
       await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
                 VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${title}, ${msg})`;
-      await sendPushToUser({ userId: podRow.claimed_by ?? null, title, body: msg, tag: `gas-${id}`, isGasAlarm: true, data: { url: "/dashboard" } }).catch(() => {});
+      await sendPushToUser({ userId: podRow.claimed_by ?? null, title, body: msg, tag: `gas-${id}`, isGasAlarm: true, data: { url: `/pods/${id}`, podId: id, cause: smoke ? "smoke" : "gas" } }).catch(() => {});
     }
   }
 

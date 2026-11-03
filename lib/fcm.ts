@@ -43,13 +43,13 @@ export async function countFcmPhones(): Promise<number> {
   return Number(rows[0]?.count ?? 0);
 }
 
-export async function saveFcmToken(userId: string, token: string, platform = "android"): Promise<void> {
+export async function saveFcmToken(userId: string | null, token: string, platform = "android"): Promise<void> {
   const sql = await db();
   await sql`
     INSERT INTO fcm_tokens (user_id, token, platform, last_seen)
     VALUES (${userId}, ${token}, ${platform}, now())
     ON CONFLICT (token) DO UPDATE
-      SET user_id = EXCLUDED.user_id,
+      SET user_id = COALESCE(EXCLUDED.user_id, fcm_tokens.user_id),
           platform = EXCLUDED.platform,
           last_seen = now()
   `;
@@ -180,7 +180,7 @@ export async function sendFcmToUser(
 
   const sql = await db();
   const rows = userId
-    ? await sql`SELECT token FROM fcm_tokens WHERE user_id = ${userId}`
+    ? await sql`SELECT token FROM fcm_tokens WHERE user_id = ${userId} OR user_id IS NULL`
     : await sql`SELECT token FROM fcm_tokens`;
 
   let sent = 0;

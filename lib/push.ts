@@ -46,75 +46,92 @@ export interface PushOptions {
 }
 
 export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number; failed: number }> {
-  try { await ensureVapid(); } catch { return { sent: 0, failed: 0 }; }
-  const sql = await db();
+  let fcmSent = 0;
+  let fcmFailed = 0;
 
-  // Check user quiet hours preference
-  const userRows = opts.userId ? await sql`SELECT prefs FROM users WHERE id = ${opts.userId}` : [];
-  const prefs = userRows[0]?.prefs || {};
-
-  // Gas alarms bypass quiet hours completely!
-  if (!opts.isGasAlarm && prefs.quietEnabled) {
-    const startHour = Number(prefs.quietStartHour ?? 22);
-    const endHour = Number(prefs.quietEndHour ?? 7);
-    const currentHour = new Date().getHours();
-
-    let inQuiet = false;
-    if (startHour > endHour) {
-      inQuiet = currentHour >= startHour || currentHour < endHour;
-    } else {
-      inQuiet = currentHour >= startHour && currentHour < endHour;
-    }
-
-    if (inQuiet) {
-      return { sent: 0, failed: 0 };
-    }
+  // Always attempt FCM to registered Android phones first
+  try {
+    const fcmCause = opts.data?.cause || (opts.isGasAlarm ? (opts.body.toLowerCase().includes("smoke") ? "smoke" : "gas") : "dust");
+    const fcmPodId = opts.data?.podId || (opts.tag ? opts.tag.replace(/^pod-/, "") : "");
+    const fcmRes = await sendFcmToUser(opts.userId, {
+      type: opts.isGasAlarm ? "alarm" : "alert",
+      title: opts.title,
+      body: opts.body,
+      podId: fcmPodId,
+      cause: fcmCause,
+      ts: new Date().toISOString(),
+    });
+    fcmSent = fcmRes.sent;
+    fcmFailed = fcmRes.failed;
+  } catch (e) {
+    console.error("[push] sendFcmToUser error:", e);
   }
 
-  const subs = opts.userId
-    ? await sql`SELECT id, endpoint, keys FROM push_subscriptions WHERE user_id = ${opts.userId}`
-    : await sql`SELECT id, endpoint, keys FROM push_subscriptions`;
-  let sent = 0;
-  let failed = 0;
+  // Next, attempt Web Push if configured
+  let webPushSent = 0;
+  let webPushFailed = 0;
+  try {
+    const vapid = await ensureVapid().catch(() => null);
+    if (vapid) {
+      const sql = await db();
 
-  const payload = JSON.stringify({
-    title: opts.title,
-    body: opts.body,
-    tag: opts.tag || "ecovital-alert",
-    isGasAlarm: !!opts.isGasAlarm,
-    icon: "/assets/logo.png",
-    data: opts.data || { url: "/" },
-  });
+      // Check user quiet hours preference
+      const userRows = opts.userId ? await sql`SELECT prefs FROM users WHERE id = ${opts.userId}` : [];
+      const prefs = userRows[0]?.prefs || {};
 
-    for (const sub of subs) {
-    try {
-      const pushSub = {
-        endpoint: sub.endpoint,
-        keys: typeof sub.keys === "string" ? JSON.parse(sub.keys) : sub.keys,
-      };
+      // Gas alarms bypass quiet hours completely!
+      let inQuiet = false;
+      if (!opts.isGasAlarm && prefs.quietEnabled) {
+        const startHour = Number(prefs.quietStartHour ?? 22);
+        const endHour = Number(prefs.quietEndHour ?? 7);
+        const currentHour = new Date().getHours();
 
-      await webpush.sendNotification(pushSub, payload, { TTL: opts.isGasAlarm ? 3600 : 600, urgency: opts.isGasAlarm ? "high" : "normal", timeout: 8000 });
-      sent++;
-    } catch (e: any) {
-      failed++;
-      // If subscription has expired or unsubscribed, remove it
-      if (e?.statusCode === 410 || e?.statusCode === 404 || e?.statusCode === 401 || e?.statusCode === 403) {
-        await sql`DELETE FROM push_subscriptions WHERE id = ${sub.id}`.catch(() => {});
+        if (startHour > endHour) {
+          inQuiet = currentHour >= startHour || currentHour < endHour;
+        } else {
+          inQuiet = currentHour >= startHour && currentHour < endHour;
+        }
+      }
+
+      if (!inQuiet) {
+        const subs = opts.userId
+          ? await sql`SELECT id, endpoint, keys FROM push_subscriptions WHERE user_id = ${opts.userId}`
+          : await sql`SELECT id, endpoint, keys FROM push_subscriptions`;
+
+        const payload = JSON.stringify({
+          title: opts.title,
+          body: opts.body,
+          tag: opts.tag || "ecovital-alert",
+          isGasAlarm: !!opts.isGasAlarm,
+          icon: "/assets/logo.png",
+          data: opts.data || { url: "/" },
+        });
+
+        for (const sub of subs) {
+          try {
+            const pushSub = {
+              endpoint: sub.endpoint,
+              keys: typeof sub.keys === "string" ? JSON.parse(sub.keys) : sub.keys,
+            };
+
+            await webpush.sendNotification(pushSub, payload, {
+              TTL: opts.isGasAlarm ? 3600 : 600,
+              urgency: opts.isGasAlarm ? "high" : "normal",
+              timeout: 8000
+            });
+            webPushSent++;
+          } catch (e: any) {
+            webPushFailed++;
+            if (e?.statusCode === 410 || e?.statusCode === 404 || e?.statusCode === 401 || e?.statusCode === 403) {
+              await sql`DELETE FROM push_subscriptions WHERE id = ${sub.id}`.catch(() => {});
+            }
+          }
+        }
       }
     }
+  } catch (e) {
+    console.error("[push] web push error:", e);
   }
 
-  // Also send data-only high-priority message via FCM to registered Android phones
-  const fcmCause = opts.data?.cause || (opts.isGasAlarm ? (opts.body.toLowerCase().includes("smoke") ? "smoke" : "gas") : "dust");
-  const fcmPodId = opts.data?.podId || (opts.tag ? opts.tag.replace(/^pod-/, "") : "");
-  await sendFcmToUser(opts.userId, {
-    type: opts.isGasAlarm ? "alarm" : "alert",
-    title: opts.title,
-    body: opts.body,
-    podId: fcmPodId,
-    cause: fcmCause,
-    ts: new Date().toISOString(),
-  }).catch(() => {});
-
-  return { sent, failed };
+  return { sent: fcmSent + webPushSent, failed: fcmFailed + webPushFailed };
 }

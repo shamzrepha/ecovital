@@ -133,7 +133,7 @@ const SCHEMA = [
    )`,
   `CREATE TABLE IF NOT EXISTS fcm_tokens (
      id bigserial PRIMARY KEY,
-     user_id text NOT NULL,
+     user_id text,
      token text UNIQUE NOT NULL,
      platform text DEFAULT 'android',
      created_at timestamptz NOT NULL DEFAULT now(),

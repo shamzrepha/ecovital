@@ -1,8 +1,10 @@
 package com.ecovital.app
 
 import android.annotation.SuppressLint
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
@@ -20,6 +22,9 @@ import android.webkit.WebViewClient
 import android.widget.Button
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.google.firebase.messaging.FirebaseMessaging
 
@@ -34,19 +39,36 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swipeRefresh: SwipeRefreshLayout
     private lateinit var offlineView: View
     private lateinit var btnRetry: Button
+    private lateinit var rootContainer: View
 
     private var hasLoadedSuccessfully = false
+
+    // Real-time receiver to auto-update / reload content when an alert push arrives
+    private val pushReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val targetUrl = intent?.getStringExtra("target_url")
+            runOnUiThread {
+                if (!targetUrl.isNullOrEmpty() && targetUrl != webView.url) {
+                    webView.loadUrl(targetUrl)
+                } else {
+                    webView.reload()
+                }
+            }
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        rootContainer = findViewById(R.id.rootContainer)
         webView = findViewById(R.id.webView)
         swipeRefresh = findViewById(R.id.swipeRefresh)
         offlineView = findViewById(R.id.offlineView)
         btnRetry = findViewById(R.id.btnRetry)
 
+        setupWindowInsets()
         setupCookies()
         setupWebView()
         setupBackNavigation()
@@ -69,12 +91,49 @@ class MainActivity : AppCompatActivity() {
         checkFirstRunPermissions()
     }
 
+    private fun setupWindowInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(rootContainer) { view, windowInsets ->
+            val statusBars = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars())
+            val navBars = windowInsets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            view.setPadding(0, statusBars.top, 0, navBars.bottom)
+            windowInsets
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        try {
+            val filter = IntentFilter(EcoFirebaseMessagingService.ACTION_PUSH_ALERT)
+            ContextCompat.registerReceiver(
+                this,
+                pushReceiver,
+                filter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // Re-sync FCM token with active cookies
+        checkAndSyncSession()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try {
+            unregisterReceiver(pushReceiver)
+        } catch (_: Exception) {}
+        CookieManager.getInstance().flush()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         val targetUrl = intent.getStringExtra("target_url")
         if (!targetUrl.isNullOrEmpty()) {
             webView.loadUrl(targetUrl)
+        } else {
+            webView.reload()
         }
     }
 
@@ -212,10 +271,5 @@ class MainActivity : AppCompatActivity() {
             val intent = Intent(this, PermissionsActivity::class.java)
             startActivity(intent)
         }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        CookieManager.getInstance().flush()
     }
 }

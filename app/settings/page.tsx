@@ -24,6 +24,14 @@ export default function SettingsPage() {
   const load = useCallback(async () => {
     if (typeof window !== "undefined" && (window as any).AndroidBridge) {
       setIsAndroidApp(true);
+      const bridgeToken = (window as any).AndroidBridge.getFcmToken?.();
+      if (bridgeToken) {
+        fetch("/api/fcm", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: bridgeToken, platform: "android" }),
+        }).catch(() => {});
+      }
     }
     const res = await fetch("/api/user", { cache: "no-store" });
     const j = await res.json();
@@ -146,6 +154,16 @@ export default function SettingsPage() {
       setMsg("Triggering emergency alarm test to your Android phone...");
       if (typeof window !== "undefined" && (window as any).AndroidBridge?.testAlarm) {
         (window as any).AndroidBridge.testAlarm();
+      }
+      if (typeof window !== "undefined" && (window as any).AndroidBridge?.getFcmToken) {
+        const t = (window as any).AndroidBridge.getFcmToken();
+        if (t) {
+          await fetch("/api/fcm", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token: t, platform: "android" }),
+          }).catch(() => {});
+        }
       }
       const res = await fetch("/api/fcm/test", {
         method: "POST",
