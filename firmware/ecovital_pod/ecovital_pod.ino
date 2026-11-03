@@ -790,6 +790,7 @@ uint32_t gasWarmAt = 0, gasLowSince = 0, gasClearSince = 0, gasStarted = 0, gasL
 volatile int sirenRequest = 0;
 enum Cause { C_NONE = 0, C_SMOKE, C_GAS, C_DUST, C_STUFFY };
 uint8_t causeId = C_NONE;
+uint32_t apOpenedAt = 0;
 volatile bool apActive = false;                 // the pod's own setup Wi-Fi is open
 volatile bool uploadNow = false;
 
@@ -1183,7 +1184,7 @@ void loadIdentity() {
   if (cfgBase.indexOf("your-app") >= 0 || !cfgBase.length()) { cfgBase = DEFAULT_BASE; prefs.remove("base"); }
   if (cfgKey.startsWith("the-same-") || !cfgKey.length()) { cfgKey = DEFAULT_KEY; prefs.remove("key"); }
   while (cfgBase.endsWith("/")) cfgBase.remove(cfgBase.length() - 1);
-  if (cfgSsid == "YOUR_WIFI_NAME") cfgSsid = "";
+  if (cfgSsid == "YOUR_WIFI_NAME") { cfgSsid = DEFAULT_SSID; cfgPass = DEFAULT_PASS; }   // an old build saved the placeholder: use the built-in one
   spkVol = prefs.getUChar("vol", 100) / 100.0f;
   muted = prefs.getBool("muted", false);
 }
@@ -1473,11 +1474,21 @@ void startWebServer() {
 }
 
 void startPortal() {                       // pod's own Wi-Fi so you can give it your Wi-Fi details
+  if (apActive) return;
+  Serial.println("[portal] 1/3 stopping the Wi-Fi search"); Serial.flush();
+  WiFi.setAutoReconnect(false);            // do not let the failed search fight the mode change (this was resetting the chip)
+  WiFi.disconnect(false, false);
+  delay(300);
+  Serial.println("[portal] 2/3 starting the setup network"); Serial.flush();
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(apName);
+  delay(150);
+  bool ok = WiFi.softAP(apName);
+  Serial.printf("[portal] 3/3 setup network %s\n", ok ? "ready" : "FAILED"); Serial.flush();
   delay(150);
   dnsServer.start(53, "*", WiFi.softAPIP());
+  WiFi.setAutoReconnect(true);
   apActive = true;
+  apOpenedAt = millis();
   Serial.printf("[setup] join Wi-Fi \"%s\" then open http://192.168.4.1/\n", apName);
 }
 
@@ -1763,7 +1774,7 @@ void netTask(void*) {
       // Saved network missing or wrong: after 40 s the pod opens its own "EcoVital-XXXX" Wi-Fi so you can pick another
       // network, and it keeps trying the saved one in the background. It closes again by itself once it connects.
       if (!apActive && (millis() - downSince > 40000 || !cfgSsid.length())) { startPortal(); Serial.println("[net] saved Wi-Fi not found, setup network opened"); }
-      bool someoneSettingUp = apActive && WiFi.softAPgetStationNum() > 0;   // do not disturb a phone that is setting it up
+      bool someoneSettingUp = apActive && WiFi.softAPgetStationNum() > 0 && (millis() - apOpenedAt < 180000UL);   // leave a phone alone for 3 min while it sets things up; after that keep trying the saved Wi-Fi
       if (millis() - lastTry > 20000 && !someoneSettingUp) { lastTry = millis(); if (cfgSsid.length()) { WiFi.disconnect(); WiFi.begin(WIFI_SSID, WIFI_PASS); } }
       vTaskDelay(pdMS_TO_TICKS(500));
       continue;
