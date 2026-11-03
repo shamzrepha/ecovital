@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { getVapidPublicKey, sendPushToUser } from "../lib/push.ts";
 import { db } from "../lib/db.ts";
 
-test("VAPID public key is returned and formatted correctly", () => {
-  const key = getVapidPublicKey();
+test("VAPID public key is returned, formatted correctly and stays the same", async () => {
+  const key = await getVapidPublicKey();
+  assert.equal(await getVapidPublicKey(), key);
   assert.ok(typeof key === "string" && key.length > 30);
 });
 

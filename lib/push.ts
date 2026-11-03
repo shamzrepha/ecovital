@@ -1,44 +1,42 @@
 import webpush from "web-push";
 import { db } from "./db.ts";
 
-// Standard VAPID credentials for EcoVital Web Push alerts.
-// Can be customized via environment variables.
-const DEFAULT_VAPID_PUBLIC = "BOSaF49_j32E2T0z36vO5JqNlD9ZvZvZ_GgK3B9_H6UqGZp5a6q5PjZ5kZ0L7Q8R9S0T1U2V3W4X5Y6Z7A8B9C0";
-const DEFAULT_VAPID_PRIVATE = "z4X1c2V3b4N5m6A7s8D9f0G1h2J3k4L5z6X7c8V9b0N";
-
+// VAPID keys must stay the same forever: a phone subscribed with one key pair only accepts pushes signed by that pair.
+// Serverless instances restart often, so the pair comes from env (VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY) or is created
+// once and kept in the database. (Making new keys on each start silently broke every subscription.)
+let keyCache: { publicKey: string; privateKey: string } | null = null;
 let vapidConfigured = false;
 
-function ensureVapid(): { publicKey: string; privateKey: string } {
-  let pub = process.env.VAPID_PUBLIC_KEY;
-  let priv = process.env.VAPID_PRIVATE_KEY;
-
-  if (!pub || !priv) {
-    // Generate or use consistent fallback keys
-    const generated = webpush.generateVAPIDKeys();
-    pub = pub || generated.publicKey;
-    priv = priv || generated.privateKey;
+async function ensureVapid(): Promise<{ publicKey: string; privateKey: string }> {
+  if (!keyCache) {
+    const envPub = process.env.VAPID_PUBLIC_KEY, envPriv = process.env.VAPID_PRIVATE_KEY;
+    if (envPub && envPriv) {
+      keyCache = { publicKey: envPub, privateKey: envPriv };
+    } else {
+      const sql = await db();
+      await sql`CREATE TABLE IF NOT EXISTS push_config (id int PRIMARY KEY, pub text NOT NULL, priv text NOT NULL)`;
+      let rows = await sql`SELECT pub, priv FROM push_config WHERE id = 1`;
+      if (!rows.length) {
+        const g = webpush.generateVAPIDKeys();
+        await sql`INSERT INTO push_config (id, pub, priv) VALUES (1, ${g.publicKey}, ${g.privateKey}) ON CONFLICT (id) DO NOTHING`;
+        rows = await sql`SELECT pub, priv FROM push_config WHERE id = 1`;
+      }
+      keyCache = { publicKey: String(rows[0].pub), privateKey: String(rows[0].priv) };
+    }
   }
-
   if (!vapidConfigured) {
-    try {
-      webpush.setVapidDetails(
-        "mailto:shamzypre14@gmail.com",
-        pub,
-        priv
-      );
-      vapidConfigured = true;
-    } catch { /* ignore if already set */ }
+    webpush.setVapidDetails("mailto:shamzypre14@gmail.com", keyCache.publicKey, keyCache.privateKey);
+    vapidConfigured = true;
   }
-
-  return { publicKey: pub, privateKey: priv };
+  return keyCache;
 }
 
-export function getVapidPublicKey(): string {
-  return ensureVapid().publicKey;
+export async function getVapidPublicKey(): Promise<string> {
+  return (await ensureVapid()).publicKey;
 }
 
 export interface PushOptions {
-  userId: string;
+  userId: string | null;   // null = every saved phone (pod not claimed yet)
   title: string;
   body: string;
   tag?: string;
@@ -47,11 +45,11 @@ export interface PushOptions {
 }
 
 export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number; failed: number }> {
-  ensureVapid();
+  try { await ensureVapid(); } catch { return { sent: 0, failed: 0 }; }
   const sql = await db();
 
   // Check user quiet hours preference
-  const userRows = await sql`SELECT prefs FROM users WHERE id = ${opts.userId}`;
+  const userRows = opts.userId ? await sql`SELECT prefs FROM users WHERE id = ${opts.userId}` : [];
   const prefs = userRows[0]?.prefs || {};
 
   // Gas alarms bypass quiet hours completely!
@@ -72,7 +70,9 @@ export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number;
     }
   }
 
-  const subs = await sql`SELECT id, endpoint, keys FROM push_subscriptions WHERE user_id = ${opts.userId}`;
+  const subs = opts.userId
+    ? await sql`SELECT id, endpoint, keys FROM push_subscriptions WHERE user_id = ${opts.userId}`
+    : await sql`SELECT id, endpoint, keys FROM push_subscriptions`;
   let sent = 0;
   let failed = 0;
 
@@ -92,12 +92,12 @@ export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number;
         keys: typeof sub.keys === "string" ? JSON.parse(sub.keys) : sub.keys,
       };
 
-      await webpush.sendNotification(pushSub, payload);
+      await webpush.sendNotification(pushSub, payload, { TTL: opts.isGasAlarm ? 3600 : 600, urgency: opts.isGasAlarm ? "high" : "normal", timeout: 8000 });
       sent++;
     } catch (e: any) {
       failed++;
       // If subscription has expired or unsubscribed, remove it
-      if (e?.statusCode === 410 || e?.statusCode === 404) {
+      if (e?.statusCode === 410 || e?.statusCode === 404 || e?.statusCode === 401 || e?.statusCode === 403) {
         await sql`DELETE FROM push_subscriptions WHERE id = ${sub.id}`.catch(() => {});
       }
     }

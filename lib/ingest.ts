@@ -18,6 +18,7 @@ export interface DeviceInfo {
   lat?: number | null;
   lng?: number | null;
   simulated?: boolean;
+  alarm?: boolean;   // the pod itself says it sees possible gas or fumes
   meta?: Record<string, unknown>;
 }
 
@@ -313,9 +314,9 @@ export async function ingest(
         await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
                   VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${title}, ${body})`;
 
-        if (podRow.claimed_by) {
-          sendPushToUser({
-            userId: podRow.claimed_by,
+        {
+          await sendPushToUser({
+            userId: podRow.claimed_by ?? null,
             title,
             body,
             tag: `pod-${id}`,
@@ -324,6 +325,25 @@ export async function ingest(
           }).catch(() => {});
         }
       }
+    }
+  }
+
+  // The pod's own fast gas/fumes alarm: logged once per 2 minutes and always pushed to the phone, even in quiet hours.
+  if (info.alarm) {
+    const recent = await sql`SELECT id FROM events WHERE device_id = ${id} AND data->>'alarm' = 'gas' AND ts > ${iso(now - 120_000)}::timestamptz LIMIT 1`;
+    if (!recent.length) {
+      const alarmName = podRow.nickname || info.name || id;
+      const msg = "Possible gas or fumes detected. Open the windows, put out any flame and leave the room if you smell gas.";
+      const ins = await sql`INSERT INTO events (device_id, ts, kind, metric, status, severity, message, spoken, spoken_flag, source, data)
+                 VALUES (${id}, ${iso(now)}::timestamptz, 'alert', 'air', 'bad-low', 2, ${msg}, ${null}, false, 'pod-alarm',
+                         ${JSON.stringify({ alarm: "gas", tags: ["measured"], action: "open_window", value: values.air ?? null })}::jsonb)
+                 RETURNING id`;
+      const eventId = Number(ins[0].id);
+      result.events.push(eventId);
+      const title = `${alarmName}: 🚨 Possible gas or fumes`;
+      await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
+                VALUES (${podRow.claimed_by ?? null}, ${id}, ${eventId}, 'web_push', ${title}, ${msg})`;
+      await sendPushToUser({ userId: podRow.claimed_by ?? null, title, body: msg, tag: `gas-${id}`, isGasAlarm: true, data: { url: "/dashboard" } }).catch(() => {});
     }
   }
 

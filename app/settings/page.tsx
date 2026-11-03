@@ -94,6 +94,8 @@ export default function SettingsPage() {
         return;
       }
 
+      const old = await reg.pushManager.getSubscription();
+      if (old) await old.unsubscribe().catch(() => {});   // an older one may have been made with different keys
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey),

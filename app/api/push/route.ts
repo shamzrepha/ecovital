@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 // GET /api/push: returns the VAPID public key
 export async function GET(req: NextRequest) {
   try {
-    const key = getVapidPublicKey();
+    const key = await getVapidPublicKey();
     return NextResponse.json({ vapidPublicKey: key });
   } catch (e) {
     return errorResponse(e);
