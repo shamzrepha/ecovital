@@ -1,5 +1,6 @@
 import webpush from "web-push";
 import { db } from "./db.ts";
+import { sendFcmToUser } from "./fcm.ts";
 
 // Standard VAPID credentials for EcoVital Web Push alerts.
 // Can be customized via environment variables.
@@ -85,7 +86,7 @@ export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number;
     data: opts.data || { url: "/" },
   });
 
-  for (const sub of subs) {
+    for (const sub of subs) {
     try {
       const pushSub = {
         endpoint: sub.endpoint,
@@ -102,6 +103,18 @@ export async function sendPushToUser(opts: PushOptions): Promise<{ sent: number;
       }
     }
   }
+
+  // Also send data-only high-priority message via FCM to registered Android phones
+  const fcmCause = opts.data?.cause || (opts.isGasAlarm ? (opts.body.toLowerCase().includes("smoke") ? "smoke" : "gas") : "dust");
+  const fcmPodId = opts.data?.podId || (opts.tag ? opts.tag.replace(/^pod-/, "") : "");
+  await sendFcmToUser(opts.userId, {
+    type: opts.isGasAlarm ? "alarm" : "alert",
+    title: opts.title,
+    body: opts.body,
+    podId: fcmPodId,
+    cause: fcmCause,
+    ts: new Date().toISOString(),
+  }).catch(() => {});
 
   return { sent, failed };
 }

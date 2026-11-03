@@ -131,6 +131,15 @@ const SCHEMA = [
      prefs jsonb NOT NULL DEFAULT '{"metrics":{"air":true,"dust":true,"temp":true,"hum":true},"quietStart":"22:00","quietEnd":"06:30","quietEnabled":false}'::jsonb,
      created_at timestamptz NOT NULL DEFAULT now()
    )`,
+  `CREATE TABLE IF NOT EXISTS fcm_tokens (
+     id bigserial PRIMARY KEY,
+     user_id text NOT NULL,
+     token text UNIQUE NOT NULL,
+     platform text DEFAULT 'android',
+     created_at timestamptz NOT NULL DEFAULT now(),
+     last_seen timestamptz NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS fcm_tokens_user_id ON fcm_tokens (user_id)`,
   `CREATE TABLE IF NOT EXISTS insights (
      id bigserial PRIMARY KEY,
      device_id text NOT NULL,

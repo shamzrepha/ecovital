@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { getSessionUser } from "@/lib/session";
 import { aiStats } from "@/lib/gemini-models";
+import { isFcmConfigured, countFcmPhones } from "@/lib/fcm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,11 +20,16 @@ export async function GET(req: Request) {
     geminiLastOkAt: aiStats.lastOkAt ? new Date(aiStats.lastOkAt).toISOString() : null,
     geminiLastError: aiStats.lastError || null,
     lastGeminiError: aiStats.lastError || null,
+    fcmConfigured: isFcmConfigured(),
+    fcmPhones: 0,
     database: "unknown",
     contacts: [] as any[],
   };
   try {
     const sql = await db();
+    try {
+      out.fcmPhones = await countFcmPhones();
+    } catch { /* fcm table not queried yet */ }
     const rows = await sql`SELECT device_id, result, fw, (extract(epoch from last_at) * 1000)::float8 AS t FROM pod_contact ORDER BY last_at DESC LIMIT 10`;
     out.database = "ok";
     if (me?.role === "admin") out.contacts = rows.map((r: any) => ({ deviceId: r.device_id, result: r.result, fw: r.fw, secondsAgo: Math.round((Date.now() - Number(r.t)) / 1000) }));
