@@ -92,7 +92,24 @@ class AlarmService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_ALARM) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancel(NOTIFICATION_ID)
             stopSelf()
+
+            // Broadcast to immediately dismiss full-screen AlarmActivity
+            try {
+                val closeIntent = Intent("com.ecovital.app.ACTION_CLOSE_ALARM_ACTIVITY").apply {
+                    setPackage(packageName)
+                }
+                sendBroadcast(closeIntent)
+            } catch (_: Exception) {}
+
             return START_NOT_STICKY
         }
 
@@ -142,7 +159,8 @@ class AlarmService : Service() {
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = getString(R.string.alarm_channel_desc)
-                setSound(soundUri, audioAttributes)
+                // Notification channel is silent; looping siren is played exclusively by mediaPlayer
+                setSound(null, null)
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 800)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
@@ -275,6 +293,15 @@ class AlarmService : Service() {
     override fun onDestroy() {
         timeoutHandler.removeCallbacks(autoStopRunnable)
         isRinging = false
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+        nm?.cancel(NOTIFICATION_ID)
 
         try {
             mediaPlayer?.stop()

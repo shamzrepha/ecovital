@@ -195,30 +195,29 @@ class MainActivity : AppCompatActivity() {
         settings.cacheMode = WebSettings.LOAD_DEFAULT
 
         // Register native bridge for web settings page and emergency overlay
-        webView.addJavascriptInterface(
-            AndroidBridge(this) {
-                // Test alarm trigger
-                AlarmService.startAlarm(
-                    context = this,
-                    podId = "test-pod",
-                    podName = "Demo Pod (Test)",
-                    title = "🚨 Emergency Siren Test",
-                    cause = "smoke",
-                    body = "Testing phone emergency siren over lock screen."
-                )
-                // Also launch AlarmActivity immediately
-                val alarmIntent = Intent(this, AlarmActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    putExtra(AlarmService.EXTRA_POD_ID, "test-pod")
-                    putExtra(AlarmService.EXTRA_POD_NAME, "Demo Pod (Test)")
-                    putExtra(AlarmService.EXTRA_TITLE, "🚨 Emergency Siren Test")
-                    putExtra(AlarmService.EXTRA_CAUSE, "smoke")
-                    putExtra(AlarmService.EXTRA_BODY, "Testing phone emergency siren over lock screen.")
-                }
-                startActivity(alarmIntent)
-            },
-            "AndroidBridge"
-        )
+        val bridge = AndroidBridge(this) {
+            // Test alarm trigger
+            AlarmService.startAlarm(
+                context = this,
+                podId = "test-pod",
+                podName = "Demo Pod (Test)",
+                title = "🚨 Emergency Siren Test",
+                cause = "smoke",
+                body = "Testing phone emergency siren over lock screen."
+            )
+            // Also launch AlarmActivity immediately
+            val alarmIntent = Intent(this, AlarmActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                putExtra(AlarmService.EXTRA_POD_ID, "test-pod")
+                putExtra(AlarmService.EXTRA_POD_NAME, "Demo Pod (Test)")
+                putExtra(AlarmService.EXTRA_TITLE, "🚨 Emergency Siren Test")
+                putExtra(AlarmService.EXTRA_CAUSE, "smoke")
+                putExtra(AlarmService.EXTRA_BODY, "Testing phone emergency siren over lock screen.")
+            }
+            startActivity(alarmIntent)
+        }
+        webView.addJavascriptInterface(bridge, "AndroidBridge")
+        webView.addJavascriptInterface(bridge, "Android")
 
         webView.webChromeClient = WebChromeClient()
 

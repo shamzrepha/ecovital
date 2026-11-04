@@ -48,6 +48,10 @@ export default function EmergencySosOverlay() {
   const playSiren = useCallback(() => {
     stopAudio();
 
+    // If running inside Android companion app, native AlarmService handles the loud siren
+    const isNativeApp = typeof window !== "undefined" && Boolean((window as any).AndroidBridge || (window as any).Android);
+    if (isNativeApp) return;
+
     // 1. Try HTML Audio Element with /assets/siren.wav
     try {
       const audio = new Audio("/assets/siren.wav");
@@ -102,6 +106,12 @@ export default function EmergencySosOverlay() {
 
   const dismissAlert = () => {
     stopAudio();
+    if (typeof window !== "undefined") {
+      const bridge = (window as any).AndroidBridge || (window as any).Android;
+      if (bridge?.stopAlarm) {
+        try { bridge.stopAlarm(); } catch (_) {}
+      }
+    }
     if (alert?.id) {
       setDismissedId(alert.id);
     }

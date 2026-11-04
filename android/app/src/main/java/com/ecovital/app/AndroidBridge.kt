@@ -21,6 +21,11 @@ class AndroidBridge(
     }
 
     @JavascriptInterface
+    fun stopAlarm() {
+        AlarmService.stopAlarm(context)
+    }
+
+    @JavascriptInterface
     fun callEmergency() {
         try {
             val dialIntent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:112")).apply {

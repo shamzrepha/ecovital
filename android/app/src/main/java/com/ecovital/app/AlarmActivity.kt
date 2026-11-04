@@ -1,8 +1,10 @@
 package com.ecovital.app
 
 import android.app.KeyguardManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,8 +15,21 @@ import androidx.appcompat.app.AppCompatActivity
 
 class AlarmActivity : AppCompatActivity() {
 
+    private val closeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            finish()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val filter = IntentFilter("com.ecovital.app.ACTION_CLOSE_ALARM_ACTIVITY")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(closeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(closeReceiver, filter)
+        }
 
         // Wake screen and show over keyguard
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
@@ -88,6 +103,13 @@ class AlarmActivity : AppCompatActivity() {
             startActivity(mainIntent)
             finish()
         }
+    }
+
+    override fun onDestroy() {
+        try {
+            unregisterReceiver(closeReceiver)
+        } catch (_: Exception) {}
+        super.onDestroy()
     }
 
     @Deprecated("Deprecated in Java", ReplaceWith("Unit"))

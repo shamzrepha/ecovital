@@ -312,7 +312,7 @@ export async function ingest(
       const canNotify = isGasAlarm || ((isAlert || speak) && metricEnabled && !isQuietHour(now, userPrefs));
 
       if (canNotify) {
-        if (isGasAlarm) pushedGasAlarm = true;
+        if (isGasAlarm) { pushedGasAlarm = true; (data as any).alarm = "gas"; }
         const title = `${devName}: ${isGasAlarm ? "🚨 Gas / Severe Air Alert" : t.kind === "recovered" ? "Back to normal" : t.kind === "predictive" ? "Early warning" : "Room alert"}`;
         const body = spoken ?? describeTrigger(t);
         await sql`INSERT INTO notifications_log (user_id, device_id, event_id, channel, title, body)
@@ -323,7 +323,7 @@ export async function ingest(
             userId: podRow.claimed_by ?? null,
             title,
             body,
-            tag: `pod-${id}`,
+            tag: isGasAlarm ? `gas-${id}` : `pod-${id}`,
             isGasAlarm,
             data: { url: `/pods/${id}`, podId: id, cause: t.metric },
           }).catch(() => {});
@@ -360,7 +360,7 @@ export async function ingest(
 
   // The pod's own fast gas/fumes alarm: logged once per 2 minutes and always pushed to the phone, even in quiet hours.
   if (info.alarm && !pushedGasAlarm) {
-    const recent = await sql`SELECT id FROM events WHERE device_id = ${id} AND data->>'alarm' = 'gas' AND ts > ${iso(now - 120_000)}::timestamptz LIMIT 1`;
+    const recent = await sql`SELECT id FROM events WHERE device_id = ${id} AND (data->>'alarm' = 'gas' OR (metric = 'air' AND status = 'bad-low')) AND ts > ${iso(now - 120_000)}::timestamptz LIMIT 1`;
     if (!recent.length) {
       const alarmName = podRow.nickname || info.name || id;
       const smoke = info.cause === "smoke";

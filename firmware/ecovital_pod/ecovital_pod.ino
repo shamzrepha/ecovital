@@ -61,7 +61,7 @@
 #define DEVICE_LOC   "FUTO, Owerri, Nigeria"
 #define DEVICE_LAT   5.385f
 #define DEVICE_LNG   6.998f
-#define FW_VERSION "2.8"
+#define FW_VERSION "2.9"
 // The DEFAULT_ values above are only used the very first time. After that the pod uses what was saved from
 // its setup page (join the "EcoVital-XXXX" Wi-Fi, or open http://<pod-ip>/), so you never reflash to change them.
 
@@ -519,9 +519,11 @@ void takePulse() {
   delayMicroseconds(280);
   dustSumMv += analogReadMilliVolts(PIN_DUST_VO);
   digitalWrite(PIN_DUST_LED, HIGH);
-  delayMicroseconds(35); // Allow ADC supply rail to settle after LED high
+  delayMicroseconds(60); // Allow ADC supply rail to settle after LED high
   int m1 = analogReadMilliVolts(PIN_MQ);
+  delayMicroseconds(40);
   int m2 = analogReadMilliVolts(PIN_MQ);
+  delayMicroseconds(40);
   int m3 = analogReadMilliVolts(PIN_MQ);
   int med = (m1 > m2) ? ((m2 > m3) ? m2 : ((m1 > m3) ? m3 : m1)) : ((m1 > m3) ? m1 : ((m2 > m3) ? m3 : m2));
   mqSumMv += med;
@@ -1020,12 +1022,12 @@ void gasStep(uint32_t now, float air) {
   // Do not re-trigger during cooldown to prevent sensor bounce / double trigger
   if (!gasAlarm && !test && (int32_t)(gasCooldownUntil - now) > 0) return;
 
-  bool bad = test || air < GAS_LOW_LEVEL || air <= airRef - GAS_DROP_POINTS;
+  bool bad = test || air < 25.0f || (air < 35.0f && airRef >= 50.0f && air <= airRef - 20.0f);
   if (!gasAlarm) {
     if (bad) {
       if (!gasLowSince) gasLowSince = now ? now : 1;
       // Require 2.5s sustained drop before alarm latch (filters out transient ADC spikes)
-      if (now - gasLowSince >= (test ? 0 : 2500)) {
+      if (now - gasLowSince >= (test ? 0 : 3000)) {
         gasAlarm = true; gasStarted = now; gasLastSound = 0; gasClearSince = 0; gasTrig = true; uploadNow = true;
         Serial.printf("[ALARM] possible gas or fumes: air index %.0f (baseline %.0f)\n", air, airRef);
       }
@@ -1036,12 +1038,13 @@ void gasStep(uint32_t now, float air) {
   } else {
     // Hold alarm for at least 15s to prevent stutter/double-buzzing
     bool minHoldPassed = (now - gasStarted) >= 15000UL;
-    bool ok = !test && minHoldPassed && air >= GAS_LOW_LEVEL + 8 && air >= airRef - 6.0f;
+    bool ok = !test && minHoldPassed && air >= 45.0f && air >= airRef - 8.0f;
     if (ok) { if (!gasClearSince) gasClearSince = now ? now : 1; } else gasClearSince = 0;
     bool timeout = now - gasStarted > 300000UL;  // never stay in alarm forever if the room really changed
     if ((gasClearSince && now - gasClearSince >= 12000) || timeout) {
       gasAlarm = false; gasLowSince = 0; uploadNow = true;
-      gasCooldownUntil = now + 15000UL; // 15-second debounce cooldown
+      gasCooldownUntil = now + 25000UL; // 25-second debounce cooldown
+      airRef = air;
       if (timeout) airRef = air;
       Serial.println("[ALARM] cleared");
       queueClip(CLIP_ALL_GOOD, 90, now);
@@ -1728,7 +1731,7 @@ int postBatch(const Sample* batch, int n) {
                   DEVICE_ID, DEVICE_NAME, DEVICE_LOC, DEVICE_LAT, DEVICE_LNG, FW_VERSION, macStr, claimCode,
                   WiFi.RSSI(), (unsigned long)(nowMs / 1000), mqReady ? "true" : "false",
                   (unsigned long)ESP.getFreeHeap(), resetReasonStr(), (unsigned long)wifiDrops, dhtFailed ? "false" : "true",
-                  (gasAlarm || causeId == C_SMOKE) ? ",\"alarm\":\"gas\"" : "",
+                  (gasTrig || causeId == C_SMOKE) ? (gasTrig = false, ",\"alarm\":\"gas\"") : "",
                   causeId == C_SMOKE ? ",\"cause\":\"smoke\"" : causeId == C_GAS ? ",\"cause\":\"gas\"" : causeId == C_DUST ? ",\"cause\":\"dust\"" : causeId == C_STUFFY ? ",\"cause\":\"stuffy\"" : "");
   for (int i = 0; i < n; i++) {
     pos += snprintf(body + pos, cap - pos, "%s{\"ageMs\":%lu", i ? "," : "", (unsigned long)(nowMs - batch[i].ms));
@@ -2038,7 +2041,7 @@ void loop() {
   handleSerial();
   handleButton(now);
 
-  if (speaking) audioQuietUntil = now + 1500;     // speaker current shakes the supply: skip sensor readings during sound and 1.5 s after
+  if (speaking) audioQuietUntil = now + 2500;     // speaker current shakes the supply: skip sensor readings during sound and 1.5 s after
   bool audioQuiet = (int32_t)(now - audioQuietUntil) < 0;
   if (audioQuiet) { dustSumMv = 0; mqSumMv = 0; sampleN = 0; }   // throw away anything half-collected
 

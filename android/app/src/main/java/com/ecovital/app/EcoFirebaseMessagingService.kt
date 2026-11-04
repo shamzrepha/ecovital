@@ -104,11 +104,9 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
 
         val isAlarm = type == "alarm"
 
-        // 1. ALWAYS display a high-priority system notification with heads-up banner & sound
-        showStandardAlertNotification(title, body, podId, isAlarm)
-
-        // 2. If it is an emergency alarm, also launch looping siren service & full-screen AlarmActivity
         if (isAlarm) {
+            // Emergency Alarm: Only ONE alarm rings on the phone via the full-screen overlay & looping siren service.
+            // Do NOT fire a standard notification chime that clutters or clashes with the overlay siren.
             try {
                 AlarmService.startAlarm(
                     context = applicationContext,
@@ -119,12 +117,12 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
                     body = body
                 )
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start AlarmService, notification was shown", e)
+                Log.e(TAG, "Failed to start AlarmService", e)
             }
 
             try {
                 val alarmIntent = Intent(applicationContext, AlarmActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
                     putExtra(AlarmService.EXTRA_POD_ID, podId)
                     putExtra(AlarmService.EXTRA_POD_NAME, if (podId.isNotEmpty()) podId else "EcoVital Pod")
                     putExtra(AlarmService.EXTRA_TITLE, title)
@@ -135,6 +133,9 @@ class EcoFirebaseMessagingService : FirebaseMessagingService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Could not start AlarmActivity directly from background", e)
             }
+        } else {
+            // Standard advisory notifications (room comfort, temperature, humidity)
+            showStandardAlertNotification(title, body, podId, false)
         }
     }
 
