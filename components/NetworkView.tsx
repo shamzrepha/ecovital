@@ -40,7 +40,13 @@ export default function NetworkView() {
     try {
       const res = await fetch("/api/nodes", { cache: "no-store" });
       const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? `HTTP ${res.status}`);
+      if (!res.ok) {
+        if (res.status === 401) {
+          window.location.href = "/login?next=/dashboard";
+          return;
+        }
+        throw new Error(j.error ?? `HTTP ${res.status}`);
+      }
       setData(j);
       setError(null);
     } catch (e: any) {

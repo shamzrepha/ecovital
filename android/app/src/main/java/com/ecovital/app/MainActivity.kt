@@ -9,13 +9,19 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.Uri
+import android.net.http.SslError
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -47,6 +53,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rootContainer: View
 
     private var hasLoadedSuccessfully = false
+    private var isNetworkCallbackRegistered = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val permissionsLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        Log.i(TAG, "Returned from PermissionsActivity, loading dashboard")
+        loadDashboard()
+    }
 
     private val requestNotificationLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -54,6 +69,24 @@ class MainActivity : AppCompatActivity() {
         Log.i(TAG, "Notification permission granted: $isGranted")
         if (isGranted) {
             setupFCM()
+        }
+    }
+
+    // Network callback to automatically recover when internet is restored
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            Log.i(TAG, "Network became available, auto-retrying dashboard")
+            mainHandler.post {
+                if (!hasLoadedSuccessfully || offlineView.visibility == View.VISIBLE) {
+                    offlineView.visibility = View.GONE
+                    webView.visibility = View.VISIBLE
+                    loadDashboard()
+                }
+            }
+        }
+
+        override fun onLost(network: Network) {
+            Log.w(TAG, "Network lost")
         }
     }
 
@@ -99,6 +132,7 @@ class MainActivity : AppCompatActivity() {
         setupCookies()
         setupWebView()
         setupBackNavigation()
+        setupNetworkCallback()
         setupFCM()
 
         promptNotificationPermissionIfNeeded()
@@ -106,18 +140,38 @@ class MainActivity : AppCompatActivity() {
         btnRetry.setOnClickListener {
             offlineView.visibility = View.GONE
             webView.visibility = View.VISIBLE
-            webView.reload()
+            swipeRefresh.isRefreshing = true
+            loadDashboard()
         }
 
         swipeRefresh.setOnRefreshListener {
-            webView.reload()
+            offlineView.visibility = View.GONE
+            webView.visibility = View.VISIBLE
+            loadDashboard()
         }
 
-        // Check if opened from notification with specific pod URL
-        val targetUrl = intent?.getStringExtra("target_url") ?: DASHBOARD_URL
-        webView.loadUrl(targetUrl)
+        val prefs = getSharedPreferences("ecovital_prefs", Context.MODE_PRIVATE)
+        val hasSeenSetup = prefs.getBoolean("has_seen_perm_setup", false)
+        if (!hasSeenSetup) {
+            prefs.edit().putBoolean("has_seen_perm_setup", true).apply()
+            val intent = Intent(this, PermissionsActivity::class.java)
+            permissionsLauncher.launch(intent)
+        } else {
+            loadDashboard()
+        }
+    }
 
-        checkFirstRunPermissions()
+    private fun loadDashboard() {
+        val target = intent?.getStringExtra("target_url")
+        val urlToLoad = if (!target.isNullOrEmpty()) {
+            target
+        } else if (!webView.url.isNullOrEmpty() && webView.url != "about:blank") {
+            webView.url!!
+        } else {
+            DASHBOARD_URL
+        }
+        Log.i(TAG, "loadDashboard -> $urlToLoad")
+        webView.loadUrl(urlToLoad)
     }
 
     private fun promptNotificationPermissionIfNeeded() {
@@ -141,8 +195,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupNetworkCallback() {
+        try {
+            val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+            cm.registerNetworkCallback(request, networkCallback)
+            isNetworkCallbackRegistered = true
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not register network callback", e)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        webView.onResume()
         try {
             val filter = IntentFilter(EcoFirebaseMessagingService.ACTION_PUSH_ALERT)
             ContextCompat.registerReceiver(
@@ -156,14 +224,30 @@ class MainActivity : AppCompatActivity() {
         }
 
         checkAndSyncSession()
+
+        // If previously failed or offline view is up, attempt auto-reload when returning to foreground
+        if (!hasLoadedSuccessfully || offlineView.visibility == View.VISIBLE) {
+            loadDashboard()
+        }
     }
 
     override fun onPause() {
         super.onPause()
+        webView.onPause()
         try {
             unregisterReceiver(pushReceiver)
         } catch (_: Exception) {}
         CookieManager.getInstance().flush()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (isNetworkCallbackRegistered) {
+            try {
+                val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.unregisterNetworkCallback(networkCallback)
+            } catch (_: Exception) {}
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -173,7 +257,7 @@ class MainActivity : AppCompatActivity() {
         if (!targetUrl.isNullOrEmpty()) {
             webView.loadUrl(targetUrl)
         } else {
-            webView.reload()
+            loadDashboard()
         }
     }
 
@@ -181,7 +265,7 @@ class MainActivity : AppCompatActivity() {
         val cookieManager = CookieManager.getInstance()
         cookieManager.setAcceptCookie(true)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            cookieManager.setAcceptThirdPartyCookies(webView, false)
+            cookieManager.setAcceptThirdPartyCookies(webView, true)
         }
     }
 
@@ -190,9 +274,14 @@ class MainActivity : AppCompatActivity() {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
+        settings.databaseEnabled = true
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
         settings.cacheMode = WebSettings.LOAD_DEFAULT
+
+        // Sanitize User-Agent to avoid Vercel edge/WAF bot-detection dropping embedded WebViews
+        val defaultUa = settings.userAgentString
+        settings.userAgentString = defaultUa.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+\\s*"), "")
 
         // Register native bridge for web settings page and emergency overlay
         val bridge = AndroidBridge(this) {
@@ -252,12 +341,24 @@ class MainActivity : AppCompatActivity() {
             ) {
                 super.onReceivedError(view, request, error)
                 if (request?.isForMainFrame == true) {
+                    val errorCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error?.errorCode else null
+                    val desc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) error?.description else null
+                    Log.w(TAG, "onReceivedError main frame: $errorCode - $desc on ${request.url}")
+
                     swipeRefresh.isRefreshing = false
-                    if (!isOnline()) {
-                        webView.visibility = View.GONE
-                        offlineView.visibility = View.VISIBLE
-                    }
+                    // Show friendly retry UI instead of dead blank Chromium error
+                    webView.visibility = View.GONE
+                    offlineView.visibility = View.VISIBLE
                 }
+            }
+
+            override fun onReceivedSslError(
+                view: WebView?,
+                handler: SslErrorHandler?,
+                error: SslError?
+            ) {
+                Log.e(TAG, "onReceivedSslError: ${error?.primaryError} on ${error?.url}")
+                super.onReceivedSslError(view, handler, error)
             }
 
             override fun shouldOverrideUrlLoading(
@@ -347,22 +448,5 @@ class MainActivity : AppCompatActivity() {
         val prefs = getSharedPreferences("ecovital_prefs", Context.MODE_PRIVATE)
         val token = prefs.getString("fcm_token", null) ?: return
         EcoFirebaseMessagingService.syncFcmTokenWithServer(token)
-    }
-
-    private fun isOnline(): Boolean {
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
-        val network = cm.activeNetwork ?: return false
-        val capabilities = cm.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-    }
-
-    private fun checkFirstRunPermissions() {
-        val prefs = getSharedPreferences("ecovital_prefs", Context.MODE_PRIVATE)
-        val hasSeenSetup = prefs.getBoolean("has_seen_perm_setup", false)
-        if (!hasSeenSetup) {
-            prefs.edit().putBoolean("has_seen_perm_setup", true).apply()
-            val intent = Intent(this, PermissionsActivity::class.java)
-            startActivity(intent)
-        }
     }
 }
