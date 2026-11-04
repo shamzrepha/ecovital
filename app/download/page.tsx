@@ -16,7 +16,7 @@ export default function DownloadPage() {
             <img src="/assets/logo.png" alt="EcoVital App Logo" style={{ width: 64, height: 64, borderRadius: 12 }} />
             <div>
               <h2 style={{ margin: 0 }}>EcoVital Native Companion</h2>
-              <div style={{ color: "#059669", fontSize: 14, fontWeight: 700 }}>Version 1.2.0 (Latest Release) • Android 8.0 to 15</div>
+              <div style={{ color: "#059669", fontSize: 14, fontWeight: 700 }}>Version 1.3.0 (Latest Release) • Android 8.0 to 15</div>
             </div>
           </div>
 
@@ -38,7 +38,7 @@ export default function DownloadPage() {
               className="btn primary"
               style={{ fontSize: 18, padding: "14px 28px", textDecoration: "none", display: "inline-block", fontWeight: 700 }}
             >
-              📥 Download Android APK v1.2.0 (8.0 MB)
+              📥 Download Android APK v1.3.0 (8.0 MB)
             </a>
             <div style={{ color: "#64748B", fontSize: 12, marginTop: 8 }}>
               Direct install for Android phones • No Google Play Store account needed
@@ -46,13 +46,13 @@ export default function DownloadPage() {
           </div>
 
           <div style={{ background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: 8, padding: 14, marginBottom: 20 }}>
-            <strong style={{ color: "#166534", fontSize: 14 }}>✨ What's New in Version 1.2.0:</strong>
+            <strong style={{ color: "#166534", fontSize: 14 }}>✨ What's New in Version 1.3.0:</strong>
             <ul style={{ margin: "6px 0 0", paddingLeft: 20, fontSize: 13.5, color: "#14532D", lineHeight: 1.5 }}>
+              <li><b>Single-Alarm Overlay:</b> Only the emergency screen overlay rings — removed duplicate notification chime.</li>
+              <li><b>Instant Stop Teardown:</b> Tapping 'Stop Alarm' silences sound, vibration, and closes the alarm screen instantly.</li>
               <li><b>1-Tap Nigerian Emergency Dialer (112)</b> directly from alarm screen &amp; notification.</li>
-              <li><b>Continuous Ambulance Siren</b> playing non-stop until acknowledged.</li>
-              <li><b>Dedicated Settings Navigation</b> on mobile tab bar and header.</li>
-              <li><b>Automatic Phone Alert Sync</b> linking your phone on launch.</li>
-              <li><b>Flashing Red SOS Overlay</b> with instant emergency guidance.</li>
+              <li><b>Near Real-Time 3s Streaming:</b> Fast telemetry updates from all pods.</li>
+              <li><b>Continuous Ambulance Siren:</b> Loud lock-screen alert piercing silent mode.</li>
             </ul>
           </div>
 
